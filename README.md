@@ -8,29 +8,65 @@ detect → diagnose ("what changed?") → fix as PR → human approves (Telegram
 
 Built for an "AI Agents" hackathon. The end goal is to run it on a **closed network**, with open-weight models served by Ollama.
 
-## Status
+## Quick start
 
-Design phase. No code yet.
+Prerequisites: Docker, kind, kubectl, helm, [uv](https://docs.astral.sh/uv/), gh (logged in to the account that owns the gitops repo). About 6 GB free disk and 8 GB RAM.
 
-## Design docs
+```bash
+cp .env.example .env        # fill in LLM_API_KEY (Groq), GITHUB_TOKEN, optionally Telegram
+make deps tools             # Python deps + kubeconform
+make seed                   # once: create + seed the gitops repo (RaniGiterman/devon-gitops)
+make up                     # kind + Prometheus/Alertmanager + ArgoCD + demo app (~5 min)
+make agent                  # run the agent; scoreboard at http://localhost:8088
+```
 
-| File | What's in it |
-|---|---|
-| [design/architecture.html](design/architecture.html) | Full design doc: demo story, architecture diagram, detection layers, components, closed-network path, guardrails, fault catalog, decisions, work split, risks. Open it in a browser. |
-| [design/diagrams.md](design/diagrams.md) | Architecture, incident lifecycle and sequence diagrams, in Mermaid (renders on GitHub). |
-| [design/plan.md](design/plan.md) | The original planning outline (stack choices since changed; see below). |
+In another terminal, break something:
 
-## Key ideas
+```bash
+make chaos-list
+uv run devon-chaos inject oom-limit     # or: make barrage
+make reset                              # back to baseline when done
+```
 
-- **The agent cannot write to the cluster.** It has read-only RBAC. Every fix goes through a GitOps PR that a human approves.
-- **"What changed?" is the core of the diagnosis.** Faults are injected as git commits, so the agent links each failure to the commit that caused it.
-- **Detection is layered and needs no LLM.** Five detectors: a Kubernetes API watch, metrics alerts, a log tail, a synthetic prober and a periodic sweep. Together they catch problems no single source sees (a blocked NetworkPolicy leaves every pod green; a filling PVC is visible only in metrics). The LLM runs only after a signal.
-- **The agent proves its fixes work.** It watches the rollout after each fix and reverts the fix if the symptom persists.
-- **One codebase, internet or air-gapped.** The LLM, the chat channel and the git server each sit behind a small interface. Moving to the closed network is a configuration change.
+Approve the fix in Telegram, or on the scoreboard page if Telegram isn't configured.
+
+### No API key yet?
+
+A scripted, OpenAI-compatible stand-in LLM lets you run the whole loop offline. It recognises the chaos catalog's commits and proposes the reverse edit:
+
+```bash
+make fake-llm               # terminal 1
+make agent-offline          # terminal 2
+```
+
+### Tests
+
+```bash
+make test                   # unit tests: detectors, gate, tool loop, state machine (no cluster)
+make scenarios              # every catalog fault end to end (needs `make up` + a running agent)
+```
+
+## How it works
+
+| Piece | Where | What it does |
+|---|---|---|
+| Detectors | `agent/ingest/detectors.py`, `agent/detect.py` | K8s API watch, Alertmanager webhook, log tail, synthetic prober (via the API server's service proxy), 5-minute sweep. Deterministic; no LLM. |
+| Incident manager | `agent/manager.py`, `agent/store.py` | State machine in SQLite. One incident per workload; signals merge into it. |
+| LLM | `agent/llm/` | One OpenAI-compatible client and a small tool loop. Triage on the fast model, investigation and fixes on the smart one. |
+| Read-only tools | `agent/tools/readonly.py` | `k8s_get`, `k8s_events`, `k8s_logs`, `prom_query`, `git_log`, `git_show`, `read_manifest`, `argocd_status`, `runbook_search`. |
+| Validation gate | `agent/gate/` | Field-level fix allowlist, kustomize render, kubeconform, server-side dry run, policies, blast radius. |
+| Approvals | `agent/notify/` | Telegram bot (inline buttons, approver allowlist) or the scoreboard's web page. |
+| Verifier | `agent/verify.py` | Waits for ArgoCD to sync the fix, then watches the workload; reverts the fix if the symptom persists. |
+| Chaos | `chaos/cli.py` | Faults as ordinary-looking commits, so "what changed?" is real. |
+
+### Safety
+
+- The agent uses two Kubernetes identities (`infra/rbac/agent.yaml`). `devon-agent` is read-only (no Secrets) and is the only one the LLM's tools use. `devon-gate` can write in the `demo` namespace, but is only ever used with `--dry-run=server`.
+- The only way the agent changes the cluster is a PR that a human merges. Postmortems are committed directly, but only under `runbooks/`, which ArgoCD doesn't sync.
+- Every proposed change is diffed field by field against an allowlist (`agent/gate/allowlist.py`); anything else never reaches a human.
+- Logs and events are passed to the model as data, and the model's tools cannot write.
 
 ## LLM setup
-
-All model calls use the OpenAI-compatible Chat Completions API (with tool calling), so the same client talks to both backends:
 
 | | Hackathon | Closed network |
 |---|---|---|
@@ -38,29 +74,28 @@ All model calls use the OpenAI-compatible Chat Completions API (with tool callin
 | Investigation + fixes | `openai/gpt-oss-120b` | `gpt-oss:120b` (~80 GB GPU) |
 | Triage | `openai/gpt-oss-20b` | `gpt-oss:20b` (~16 GB GPU) |
 
-Both backends run the same open weights, so prompts tuned at the hackathon carry over.
+Switch by changing `LLM_BASE_URL`, `LLM_API_KEY` and the model names in `.env`.
 
 ## Closed-network swaps
 
 | Piece | Hackathon | Closed network |
 |---|---|---|
 | LLM | Groq | Ollama |
-| Approvals | Telegram bot | Mattermost / Rocket.Chat bot or a web approval page (**to decide**; Telegram needs the internet) |
-| Git server | GitHub | Gitea / GitLab |
-| Images, packages | public registries, PyPI | Harbor mirror, wheelhouse |
+| Approvals | Telegram bot | Mattermost / Rocket.Chat bot, or the built-in web approval page (**to decide**; Telegram needs the internet) |
+| Git server | GitHub (`agent/githost/github.py`) | Gitea / GitLab (same three methods) |
+| Images, packages | public registries, PyPI | Harbor mirror, wheelhouse; kubeconform also needs a local schema mirror |
 
-## Planned stack
+## Known limits
 
-Python · `openai` SDK (own tool loop, no agent framework) · gpt-oss via Groq / Ollama · kind · ArgoCD · Kustomize · kube-prometheus-stack · Kyverno · `python-telegram-bot` (long polling) · SQLite
+- **PVC filling up** is in the catalog but refuses to run on kind's default `local-path` storage: it has no quota, so it would fill the laptop's disk. It needs a CSI driver with volume stats (e.g. `csi-driver-host-path`).
+- **Approvals from the scoreboard** have no authentication. Fine on a laptop; put it behind auth anywhere else.
+- **ArgoCD polls git every 20 s**, so a merged fix takes up to ~30 s to apply.
+- The kubeconfig tokens expire after 7 days; run `make kubeconfigs`.
 
-## Planned layout
+## Design docs
 
-```
-agent/        ingest, incidents, llm, tools, gate, notify, githost, verify
-chaos/        fault catalog + CLI
-scoreboard/   live demo board
-infra/        kind, bootstrap, RBAC, policies
-tests/        one scenario test per fault
-```
-
-The Kubernetes manifests live in a separate `gitops-manifests` repo, which ArgoCD watches.
+| File | What's in it |
+|---|---|
+| [design/architecture.html](design/architecture.html) | Full design doc: demo story, architecture, detection layers, components, closed-network path, guardrails, fault catalog, decisions, work split, risks. |
+| [design/diagrams.md](design/diagrams.md) | Architecture, detection, incident lifecycle and sequence diagrams in Mermaid. |
+| [design/plan.md](design/plan.md) | The original planning outline. |

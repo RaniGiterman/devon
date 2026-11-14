@@ -1,0 +1,11 @@
+# Single-node cluster to keep RAM/disk low on a laptop.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: devon
+nodes:
+  - role: control-plane
+    extraPortMappings:
+      - { containerPort: 30000, hostPort: 8000 }   # demo frontend
+      - { containerPort: 30090, hostPort: 9090 }   # Prometheus
+      - { containerPort: 30093, hostPort: 9093 }   # Alertmanager
+      - { containerPort: 30443, hostPort: 8443 }   # ArgoCD UI

@@ -1,0 +1,79 @@
+# Two identities for the agent.
+#   devon-agent: read-only, used for everything the LLM can trigger. No Secrets.
+#   devon-gate:  write verbs in the demo namespace, used ONLY by the validation
+#                gate with `kubectl apply --dry-run=server` (server-side dry run
+#                needs the same verbs as a real apply). Never handed to the LLM.
+apiVersion: v1
+kind: Namespace
+metadata: { name: devon-system }
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: devon-agent, namespace: devon-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: devon-agent-read }
+rules:
+  - apiGroups: [""]
+    resources: [pods, pods/log, events, services, endpoints, configmaps, nodes, namespaces,
+                persistentvolumeclaims, persistentvolumes, replicationcontrollers]
+    verbs: [get, list, watch]
+  - apiGroups: [""]
+    resources: [services/proxy]   # synthetic prober calls services through the API server
+    verbs: [get]
+  - apiGroups: [apps]
+    resources: [deployments, replicasets, statefulsets, daemonsets]
+    verbs: [get, list, watch]
+  - apiGroups: [batch]
+    resources: [jobs, cronjobs]
+    verbs: [get, list, watch]
+  - apiGroups: [discovery.k8s.io]
+    resources: [endpointslices]
+    verbs: [get, list, watch]
+  - apiGroups: [networking.k8s.io]
+    resources: [networkpolicies, ingresses]
+    verbs: [get, list, watch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [get, list, watch]
+  - apiGroups: [storage.k8s.io]
+    resources: [storageclasses]
+    verbs: [get, list, watch]
+  - apiGroups: [argoproj.io]
+    resources: [applications]
+    verbs: [get, list, watch]
+  - apiGroups: [monitoring.coreos.com]
+    resources: [podmonitors, servicemonitors, prometheusrules]
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: devon-agent-read }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: devon-agent-read }
+subjects: [{ kind: ServiceAccount, name: devon-agent, namespace: devon-system }]
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: devon-gate, namespace: devon-system }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: devon-gate-read }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: devon-agent-read }
+subjects: [{ kind: ServiceAccount, name: devon-gate, namespace: devon-system }]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: { name: devon-gate-dryrun, namespace: demo }
+rules:
+  - apiGroups: ["", apps, networking.k8s.io, monitoring.coreos.com]
+    resources: [configmaps, services, persistentvolumeclaims, deployments, statefulsets,
+                networkpolicies, podmonitors, prometheusrules]
+    verbs: [get, list, create, update, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: { name: devon-gate-dryrun, namespace: demo }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: Role, name: devon-gate-dryrun }
+subjects: [{ kind: ServiceAccount, name: devon-gate, namespace: devon-system }]

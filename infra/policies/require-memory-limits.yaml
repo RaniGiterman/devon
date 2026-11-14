@@ -1,0 +1,13 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: require-memory-limits
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: memory-limit
+      match: { any: [{ resources: { kinds: [Deployment, StatefulSet] } }] }
+      validate:
+        message: "Every container needs a memory limit."
+        pattern:
+          spec: { template: { spec: { containers: [{ resources: { limits: { memory: "?*" } } }] } } }

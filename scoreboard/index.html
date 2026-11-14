@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>devon scoreboard</title>
+<style>
+:root {
+  --bg: #0f151b; --surface: #161e26; --sunk: #1c2630; --fg: #e3e9ef; --muted: #8d9aa6; --line: #2c3946;
+  --accent: #7ea2f2; --ok: #6fcf98; --warn: #e8c15a; --bad: #f08a7e; --human: #f0ae4a; --llm: #b79cf0;
+  --mono: ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--fg); font: 14px/1.5 system-ui, sans-serif; }
+header { padding: 18px 24px; border-bottom: 1px solid var(--line); display: flex; flex-wrap: wrap; gap: 16px 32px; align-items: center; }
+h1 { font-size: 20px; margin: 0; letter-spacing: -0.01em; }
+h1 span { color: var(--muted); font-weight: 400; }
+.stats { display: flex; gap: 28px; flex-wrap: wrap; }
+.stat b { display: block; font-size: 26px; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.stat small { color: var(--muted); font-family: var(--mono); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+.health { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; font-family: var(--mono); font-size: 11px; }
+.chip { padding: 2px 8px; border-radius: 999px; background: var(--sunk); color: var(--muted); white-space: nowrap; }
+.chip.on { color: var(--ok); } .chip.off { color: var(--bad); }
+main { padding: 16px 24px 60px; display: grid; gap: 10px; max-width: 1200px; }
+.inc { background: var(--surface); border: 1px solid var(--line); border-left: 4px solid var(--line); border-radius: 8px; padding: 12px 16px; display: grid; gap: 6px; }
+.inc.s-RESOLVED { border-left-color: var(--ok); } .inc.s-ESCALATED, .inc.s-ROLLED_BACK { border-left-color: var(--bad); }
+.inc.s-AWAITING_APPROVAL { border-left-color: var(--human); } .inc.s-DROPPED { opacity: .55; }
+.inc.open { border-left-color: var(--accent); }
+.row { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.id { font-family: var(--mono); color: var(--muted); }
+.wl { font-weight: 600; font-size: 15px; }
+.state { font-family: var(--mono); font-size: 11px; padding: 2px 8px; border-radius: 999px; background: var(--sunk); }
+.state.RESOLVED { color: var(--ok); } .state.ESCALATED, .state.ROLLED_BACK { color: var(--bad); } .state.AWAITING_APPROVAL { color: var(--human); }
+.dur { margin-left: auto; font-family: var(--mono); font-variant-numeric: tabular-nums; color: var(--muted); }
+.title { color: var(--muted); }
+.cause { max-width: 90ch; }
+.timeline { display: flex; flex-wrap: wrap; gap: 4px; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+.timeline span::after { content: " →"; } .timeline span:last-child::after { content: ""; }
+a { color: var(--accent); }
+button { font: inherit; border-radius: 6px; border: 1px solid var(--line); background: var(--sunk); color: var(--fg); padding: 5px 12px; cursor: pointer; }
+button.approve { border-color: var(--ok); color: var(--ok); } button.reject { border-color: var(--bad); color: var(--bad); }
+button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+details summary { cursor: pointer; color: var(--muted); font-size: 12px; }
+pre { background: var(--sunk); padding: 10px; border-radius: 6px; overflow-x: auto; font: 12px/1.45 var(--mono); white-space: pre-wrap; max-height: 360px; }
+.step { font-family: var(--mono); font-size: 12px; color: var(--muted); }
+.step b { color: var(--llm); font-weight: 500; }
+.empty { color: var(--muted); padding: 40px 0; }
+label { color: var(--muted); font-size: 12px; display: flex; gap: 6px; align-items: center; }
+</style>
+</head>
+<body>
+<header>
+  <h1>devon <span>self-healing scoreboard</span></h1>
+  <div class="stats" id="stats"></div>
+  <div class="health" id="health"></div>
+</header>
+<main>
+  <label><input type="checkbox" id="showDropped"> show dropped (noise)</label>
+  <div id="list"><p class="empty">Waiting for the first incident. Inject one with <code>devon-chaos inject oom-limit</code>.</p></div>
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const fmt = (s) => s == null ? "–" : s < 90 ? `${Math.round(s)}s` : `${Math.floor(s/60)}m${String(Math.round(s%60)).padStart(2,"0")}s`;
+const open = new Set();
+const OPEN_STATES = ["DETECTED","TRIAGED","INVESTIGATING","FIX_PROPOSED","AWAITING_APPROVAL","APPLYING","VERIFYING"];
+
+async function act(id, what) {
+  let body = {who: "web"};
+  if (what === "reject") {
+    const reason = document.getElementById(`reason-${id}`).value.trim();
+    if (!reason) { document.getElementById(`reason-${id}`).focus(); return; }
+    body.reason = reason;
+  }
+  const r = await fetch(`/api/incidents/${id}/${what}`, {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(body)});
+  const j = await r.json();
+  document.getElementById(`msg-${id}`).textContent = j.message;
+  refresh();
+}
+
+async function detail(id) {
+  const d = await (await fetch(`/api/incidents/${id}`)).json();
+  const steps = d.steps.map(s => `<div class="step"><b>${esc(s.kind)}</b> ${esc(s.name)} <span>${esc((s.detail||"").split("\n")[0].slice(0,160))}</span></div>`).join("");
+  const ev = (d.diagnosis?.evidence || []).map(e => `<li>${esc(e)}</li>`).join("");
+  const checks = (d.gate?.checks || []).map(c => `${c.ok ? "✅" : "❌"} ${esc(c.name)}`).join("  ");
+  document.getElementById(`detail-${id}`).innerHTML = `
+    ${ev ? `<div><b>Evidence</b><ul>${ev}</ul></div>` : ""}
+    ${checks ? `<div><b>Checks</b> ${checks}</div>` : ""}
+    ${d.gate?.blast_radius ? `<div><b>Blast radius</b> ${esc(d.gate.blast_radius.join("; "))}</div>` : ""}
+    ${d.gate?.diff ? `<pre>${esc(d.gate.diff)}</pre>` : ""}
+    <div><b>Agent steps</b>${steps || " none yet"}</div>
+    <div><b>Signals</b><pre>${esc(d.signals.map(s => `[${s.source}] ${s.summary}`).join("\n"))}</pre></div>`;
+}
+
+function card(i) {
+  const isOpen = OPEN_STATES.includes(i.state);
+  const tl = i.transitions.map(t => `<span title="${esc(t.note)}">${esc(t.to)}</span>`).join("");
+  const awaiting = i.state === "AWAITING_APPROVAL";
+  return `<article class="inc s-${i.state} ${isOpen ? "open" : ""}" id="incident-${i.id}">
+    <div class="row"><span class="id">#${i.id}</span><span class="wl">${esc(i.workload)}</span>
+      <span class="state ${i.state}">${i.state.replace("_"," ")}</span>
+      ${i.detectors.map(d => `<span class="chip">${esc(d)}</span>`).join("")}
+      <span class="dur">${fmt(i.duration)}</span></div>
+    <div class="title">${esc(i.title)}</div>
+    ${i.root_cause ? `<div class="cause"><b>Root cause:</b> ${esc(i.root_cause)}</div>` : ""}
+    ${i.fix_title ? `<div><b>Fix:</b> ${esc(i.fix_title)} ${i.pr_url ? `· <a href="${esc(i.pr_url)}" target="_blank" rel="noopener">PR</a>` : ""}${i.approver ? ` · approved by ${esc(i.approver)}` : ""}</div>` : ""}
+    <div class="timeline">${tl}</div>
+    ${awaiting ? `<div class="row"><button class="approve" onclick="act(${i.id},'approve')">Approve &amp; merge</button>
+      <input id="reason-${i.id}" placeholder="reason for rejecting" aria-label="reason for rejecting incident ${i.id}" style="background:var(--sunk);color:var(--fg);border:1px solid var(--line);border-radius:6px;padding:5px 8px;min-width:240px">
+      <button class="reject" onclick="act(${i.id},'reject')">Reject</button></div>` : ""}
+    <div id="msg-${i.id}" class="title"></div>
+    <details ${open.has(i.id) ? "open" : ""} ontoggle="this.open ? (open.add(${i.id}), detail(${i.id})) : open.delete(${i.id})">
+      <summary>details</summary><div id="detail-${i.id}">loading…</div></details>
+  </article>`;
+}
+
+async function refresh() {
+  try {
+    const [inc, h] = await Promise.all([fetch("/api/incidents").then(r => r.json()), fetch("/api/health").then(r => r.json())]);
+    const s = inc.stats;
+    $("#stats").innerHTML = [["open", s.open], ["resolved", s.resolved], ["escalated", s.escalated], ["mean time to fix", fmt(s.mttr_s)], ["tokens", s.tokens.toLocaleString()]]
+      .map(([k, v]) => `<div class="stat"><b>${v}</b><small>${k}</small></div>`).join("");
+    const det = ["watch", "alerts", "logs", "probe", "sweep"].map(d => {
+      const age = h.detectors[d]; const ok = age != null && age < (d === "sweep" ? 400 : d === "alerts" ? 300 : 120);
+      return `<span class="chip ${ok ? "on" : "off"}" title="last seen ${age ?? "never"}s ago">${d}</span>`; }).join("");
+    $("#health").innerHTML = det + `<span class="chip ${h.watchdog_age_s != null && h.watchdog_age_s < 300 ? "on" : "off"}">heartbeat</span>
+      <span class="chip">${esc(h.llm.smart)}</span><span class="chip">approvals: ${esc(h.notifier)}</span>`;
+    const items = inc.incidents.filter(i => $("#showDropped").checked || i.state !== "DROPPED");
+    const focused = document.activeElement && document.activeElement.tagName === "INPUT" && document.activeElement.id.startsWith("reason-");
+    if (!focused) $("#list").innerHTML = items.length ? items.map(card).join("") : `<p class="empty">No incidents. Inject one with <code>devon-chaos inject oom-limit</code>.</p>`;
+    for (const id of open) if (document.getElementById(`detail-${id}`)) detail(id);
+  } catch (e) { $("#health").innerHTML = `<span class="chip off">agent unreachable</span>`; }
+}
+$("#showDropped").addEventListener("change", refresh);
+refresh(); setInterval(refresh, 2000);
+</script>
+</body>
+</html>

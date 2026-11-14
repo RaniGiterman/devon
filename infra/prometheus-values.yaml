@@ -1,0 +1,39 @@
+# kube-prometheus-stack, trimmed for a laptop. AGENT_WEBHOOK is substituted by bootstrap.sh.
+grafana: { enabled: false }
+kubeEtcd: { enabled: false }
+kubeControllerManager: { enabled: false }
+kubeScheduler: { enabled: false }
+kubeProxy: { enabled: false }
+prometheus:
+  service: { type: NodePort, nodePort: 30090 }
+  prometheusSpec:
+    retention: 6h
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+    ruleSelectorNilUsesHelmValues: false
+    podMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorSelectorNilUsesHelmValues: false
+    resources: { requests: { cpu: 100m, memory: 300Mi } }
+alertmanager:
+  service: { type: NodePort, nodePort: 30093 }
+  config:
+    global: { resolve_timeout: 2m }
+    route:
+      receiver: devon-agent
+      group_by: [alertname, namespace, pod, persistentvolumeclaim]
+      group_wait: 10s
+      group_interval: 30s
+      repeat_interval: 30m
+      # Override the chart's default sub-routes; Watchdog goes to the agent as its heartbeat.
+      routes:
+        - receiver: devon-agent
+          matchers: ['alertname = "Watchdog"']
+          repeat_interval: 2m
+    receivers:
+      - name: "null"
+      - name: devon-agent
+        webhook_configs:
+          - url: AGENT_WEBHOOK
+            send_resolved: true
+prometheusOperator:
+  resources: { requests: { cpu: 50m, memory: 64Mi } }
