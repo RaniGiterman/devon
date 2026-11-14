@@ -21,6 +21,8 @@
   --accent-soft: #e2eafb;
   --human: #b86e00;         /* the human approval step */
   --human-soft: #fbefdc;
+  --llm: #7a4cc2;           /* model calls */
+  --llm-soft: #efe7fa;
   --ok: #1f7a4a; --ok-soft: #ddf1e6;
   --warn: #9a6a00; --warn-soft: #fbf0d6;
   --bad: #b3372b; --bad-soft: #f8e1de;
@@ -30,13 +32,13 @@
 }
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --bg: #0f151b; --surface: #161e26; --sunk: #1c2630; --fg: #e3e9ef; --muted: #96a3af; --line: #2c3946;
-  --accent: #7ea2f2; --accent-soft: #1b2a47; --human: #f0ae4a; --human-soft: #3a2a12;
+  --accent: #7ea2f2; --accent-soft: #1b2a47; --human: #f0ae4a; --human-soft: #3a2a12; --llm: #b79cf0; --llm-soft: #2a2140;
   --ok: #6fcf98; --ok-soft: #14301f; --warn: #e8c15a; --warn-soft: #33290f; --bad: #f08a7e; --bad-soft: #3a1a17;
   color-scheme: dark;
 }}
 :root[data-theme="dark"] {
   --bg: #0f151b; --surface: #161e26; --sunk: #1c2630; --fg: #e3e9ef; --muted: #96a3af; --line: #2c3946;
-  --accent: #7ea2f2; --accent-soft: #1b2a47; --human: #f0ae4a; --human-soft: #3a2a12;
+  --accent: #7ea2f2; --accent-soft: #1b2a47; --human: #f0ae4a; --human-soft: #3a2a12; --llm: #b79cf0; --llm-soft: #2a2140;
   --ok: #6fcf98; --ok-soft: #14301f; --warn: #e8c15a; --warn-soft: #33290f; --bad: #f08a7e; --bad-soft: #3a1a17;
   color-scheme: dark;
 }
@@ -99,6 +101,10 @@ svg .edge.human { stroke: var(--human); stroke-width: 1.6; }
 svg .lbl { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
 svg .lbl.human { fill: var(--human); }
 svg .lbl.loop { fill: var(--accent); }
+svg .box.llm { fill: var(--llm-soft); stroke: var(--llm); stroke-width: 1.5; }
+svg .edge.llm { stroke: var(--llm); stroke-width: 1.6; }
+svg .lbl.llm { fill: var(--llm); }
+svg .ah.llm { fill: var(--llm); }
 svg .ah { fill: var(--fg); } svg .ah.read { fill: var(--muted); } svg .ah.loop { fill: var(--accent); } svg .ah.human { fill: var(--human); }
 
 /* Components */
@@ -170,7 +176,7 @@ pre.tree .c { color: var(--muted); }
   <header class="hero">
     <div class="eyebrow">Hackathon design doc · theme: AI Agents</div>
     <h1>Self-Healing K8s Agent</h1>
-    <p class="lede">An agent that notices when a workload breaks, figures out which change broke it, and opens a fix as a pull request. A human approves it in Slack, ArgoCD rolls it out, and the agent confirms the problem is gone. If it isn't, the agent reverts its own fix.</p>
+    <p class="lede">An agent that notices when a workload breaks, figures out which change broke it, and opens a fix as a pull request. A human approves it in Telegram, ArgoCD rolls it out, and the agent confirms the problem is gone. If it isn't, the agent reverts its own fix.</p>
     <div class="loop" aria-label="The loop">
       <span>detect</span><i>→</i><span>diagnose: what changed?</span><i>→</i><span>fix as PR</span><i>→</i><span class="h">human approves</span><i>→</i><span>ArgoCD applies</span><i>→</i><span>verify or revert</span>
     </div>
@@ -178,9 +184,11 @@ pre.tree .c { color: var(--muted); }
       <div>Working name <b>TBD</b> (see decisions)</div>
       <div>Assumes <b>24h</b> hackathon, <b>4 people</b></div>
       <div>Demo cluster <b>kind</b> on a laptop</div>
+      <div>LLM <b>gpt-oss</b> via Groq now, Ollama on the closed network</div>
+      <div>Approvals <b>Telegram bot</b></div>
     </div>
     <nav class="toc" aria-label="Sections">
-      <a href="#demo">Demo story</a><a href="#arch">Architecture</a><a href="#states">Incident lifecycle</a><a href="#sequence">One incident</a><a href="#components">Components</a><a href="#safety">Guardrails</a><a href="#scenarios">Fault catalog</a><a href="#decisions">Decisions</a><a href="#repo">Repo layout</a><a href="#plan">Work split</a><a href="#risks">Risks</a>
+      <a href="#demo">Demo story</a><a href="#arch">Architecture</a><a href="#states">Incident lifecycle</a><a href="#sequence">One incident</a><a href="#components">Components</a><a href="#closednet">Closed network</a><a href="#safety">Guardrails</a><a href="#scenarios">Fault catalog</a><a href="#decisions">Decisions</a><a href="#repo">Repo layout</a><a href="#plan">Work split</a><a href="#risks">Risks</a>
     </nav>
   </header>
 
@@ -190,8 +198,8 @@ pre.tree .c { color: var(--muted); }
     <ol class="story">
       <li><span class="t">0:00 · break it</span><h3>Run the chaos script</h3><p>It commits a memory limit of 64Mi to the <code>api</code> deployment. ArgoCD syncs it and pods start getting OOMKilled.</p></li>
       <li><span class="t">0:20 · detect</span><h3>Incident opens</h3><p>The watcher sees the CrashLoopBackOff and the scoreboard shows a new red incident.</p></li>
-      <li><span class="t">0:50 · diagnose</span><h3>Root cause in Slack</h3><p>"OOMKilled since commit a1b2c3, which cut the memory limit from 512Mi to 64Mi. Peak usage is 310Mi."</p></li>
-      <li class="h"><span class="t">1:20 · approve</span><h3>One click</h3><p>The Slack card shows the PR diff, the validation results and the blast radius. An engineer clicks Approve.</p></li>
+      <li><span class="t">0:50 · diagnose</span><h3>Root cause in Telegram</h3><p>"OOMKilled since commit a1b2c3, which cut the memory limit from 512Mi to 64Mi. Peak usage is 310Mi."</p></li>
+      <li class="h"><span class="t">1:20 · approve</span><h3>One click</h3><p>The Telegram message shows the PR diff, the validation results and the blast radius. An engineer taps Approve.</p></li>
       <li><span class="t">1:40 · verify</span><h3>Back to green</h3><p>ArgoCD syncs and the rollout completes. The agent watches for 3 minutes, then marks the incident resolved and writes a postmortem.</p></li>
       <li><span class="t">2:30 · scale</span><h3>Fault barrage</h3><p>Five faults are injected at once. The scoreboard shows how many were resolved and the mean time to fix. One fault is deliberately escalated.</p></li>
     </ol>
@@ -201,19 +209,20 @@ pre.tree .c { color: var(--muted); }
     <header><div class="eyebrow">System</div><h2>Architecture</h2></header>
     <figure>
       <div class="fig-scroll">
-        <svg viewBox="0 0 1100 680" role="img" aria-label="Architecture: cluster signals flow into the agent pipeline. The agent reads the cluster read-only, writes only by opening PRs to the manifests repo. Humans approve in Slack, ArgoCD syncs merged changes back to the cluster.">
+        <svg viewBox="0 0 1100 680" role="img" aria-label="Architecture: cluster signals flow into the agent pipeline. The agent reads the cluster read-only, writes only by opening PRs to the manifests repo. Humans approve in Telegram, ArgoCD syncs merged changes back to the cluster. All model calls go to one OpenAI-compatible endpoint: Groq now, Ollama on the closed network.">
           <defs>
             <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
             <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah read" d="M0,0 L10,5 L0,10 z"/></marker>
             <marker id="al" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah loop" d="M0,0 L10,5 L0,10 z"/></marker>
-            <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah human" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="all" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah llm" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="ahm"viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah human" d="M0,0 L10,5 L0,10 z"/></marker>
           </defs>
 
           <!-- zones -->
           <rect class="zone" x="20" y="30" width="300" height="560" rx="10"/>
           <text class="zone-label" x="36" y="52">KIND CLUSTER</text>
           <rect class="zone" x="360" y="30" width="380" height="560" rx="10"/>
-          <text class="zone-label" x="376" y="52">AGENT SERVICE · PYTHON + CLAUDE AGENT SDK</text>
+          <text class="zone-label" x="376" y="52">AGENT SERVICE · PYTHON</text>
           <rect class="zone" x="780" y="30" width="300" height="560" rx="10"/>
           <text class="zone-label" x="796" y="52">TEAM TOOLS</text>
 
@@ -245,10 +254,10 @@ pre.tree .c { color: var(--muted); }
           <text class="t2" x="396" y="175">state machine · SQLite</text>
           <rect class="box agent" x="380" y="210" width="320" height="44" rx="6"/>
           <text class="t1" x="396" y="229">Triage</text>
-          <text class="t2" x="396" y="245">Haiku 5.5 · noise or real?</text>
+          <text class="t2" x="396" y="245">gpt-oss-20b · noise or real?</text>
           <rect class="box agent" x="380" y="280" width="320" height="44" rx="6"/>
           <text class="t1" x="396" y="299">Investigator</text>
-          <text class="t2" x="396" y="315">Opus 5.5 · root cause + suspect commit</text>
+          <text class="t2" x="396" y="315">gpt-oss-120b · root cause + suspect commit</text>
           <rect class="box agent" x="380" y="350" width="320" height="44" rx="6"/>
           <text class="t1" x="396" y="369">Fixer + validation gate</text>
           <text class="t2" x="396" y="385">patch YAML · dry-run · policy · blast radius</text>
@@ -280,8 +289,13 @@ pre.tree .c { color: var(--muted); }
 
           <!-- external -->
           <rect class="box human" x="800" y="140" width="260" height="56" rx="6"/>
-          <text class="t1" x="930" y="164" text-anchor="middle">Slack</text>
+          <text class="t1" x="930" y="164" text-anchor="middle">Telegram bot</text>
           <text class="t2" x="930" y="182" text-anchor="middle">approve · reject · explain more</text>
+          <rect class="box llm" x="800" y="208" width="260" height="58" rx="6"/>
+          <text class="t1" x="930" y="231" text-anchor="middle">LLM endpoint · OpenAI API</text>
+          <text class="t2" x="930" y="250" text-anchor="middle">Groq now · Ollama on closed net</text>
+          <path class="edge llm" d="M700 232 H798" marker-end="url(#all)"/>
+          <text class="lbl llm" x="712" y="226">LLM calls</text>
           <rect class="box" x="800" y="280" width="260" height="56" rx="6"/>
           <text class="t1" x="930" y="304" text-anchor="middle">Runbooks + postmortems</text>
           <text class="t2" x="930" y="322" text-anchor="middle">markdown in git</text>
@@ -300,8 +314,8 @@ pre.tree .c { color: var(--muted); }
 
           <!-- git -->
           <rect class="box git" x="380" y="612" width="320" height="52" rx="6"/>
-          <text class="t1" x="540" y="634" text-anchor="middle">GitHub · gitops-manifests</text>
-          <text class="t2" x="540" y="652" text-anchor="middle">single source of truth, audit trail</text>
+          <text class="t1" x="540" y="634" text-anchor="middle">Git server · gitops-manifests</text>
+          <text class="t2" x="540" y="652" text-anchor="middle">GitHub now · Gitea on closed net</text>
 
           <path class="edge loop" d="M700 372 H722 V626 H704" marker-end="url(#al)"/>
           <path class="edge loop" d="M700 472 H722"/>
@@ -313,7 +327,7 @@ pre.tree .c { color: var(--muted); }
           <text class="lbl" x="200" y="630">sync on merge</text>
         </svg>
       </div>
-      <figcaption>The agent never writes to the cluster directly. Its only write path is a PR to the manifests repo (blue lane), and a human merges it from Slack (amber). ArgoCD is the only thing that applies changes, so every fix and every revert is a commit. Dashed lines are read-only. The scoreboard reads the incident store.</figcaption>
+      <figcaption>The agent never writes to the cluster directly. Its only write path is a PR to the manifests repo (blue lane), and a human merges it from Telegram (amber). ArgoCD is the only thing that applies changes, so every fix and every revert is a commit. Triage, the investigator and the fixer all call one OpenAI-compatible endpoint (purple); moving from Groq to Ollama means changing a base URL. Dashed lines are read-only. The scoreboard reads the incident store.</figcaption>
     </figure>
   </section>
 
@@ -343,7 +357,7 @@ stateDiagram-v2
   DROPPED --> [*]
 </pre>
       </div>
-      <figcaption>Every incident is keyed by (namespace, workload, symptom), so 40 crashing pods count as one incident. A rejection in Slack is not a dead end: the engineer's reason goes back to the investigator as context. Every edge is a row in SQLite, which gives the scoreboard its timings for free.</figcaption>
+      <figcaption>Every incident is keyed by (namespace, workload, symptom), so 40 crashing pods count as one incident. A rejection in Telegram is not a dead end: the engineer's reason goes back to the investigator as context. Every edge is a row in SQLite, which gives the scoreboard its timings for free.</figcaption>
     </figure>
   </section>
 
@@ -355,39 +369,43 @@ stateDiagram-v2
 sequenceDiagram
   autonumber
   participant C as Chaos harness
-  participant G as GitHub
+  participant G as Git server
   participant A as ArgoCD
   participant K as K8s API
   participant W as Agent
-  participant L as Claude
-  participant S as Slack
+  participant L as LLM (gpt-oss)
+  participant T as Telegram bot
   participant E as Engineer
   C->>G: commit api memory 512Mi → 64Mi
   G->>A: webhook
   A->>K: apply Deployment
   K-->>W: Pod OOMKilled, CrashLoopBackOff
-  W->>L: triage (Haiku)
+  W->>L: triage (gpt-oss-20b)
   L-->>W: actionable
-  W->>L: investigate (Opus + tools)
-  L->>K: describe pod, events, logs
-  L->>G: git log -p apps/api
+  W->>L: investigate (gpt-oss-120b + tool schemas)
+  L-->>W: tool_calls: describe pod, events, logs
+  W->>K: run read-only tools
+  W->>L: tool results
+  L-->>W: tool_call: git log -p apps/api
+  W->>G: git log -p apps/api
+  W->>L: tool results
   L-->>W: diagnosis JSON: commit a1b2c3, peak 310Mi
   W->>L: propose fix
   L-->>W: patch memory 512Mi
   W->>W: kubeconform, dry-run=server, kyverno
   W->>G: open PR #42
-  W->>S: card: cause, evidence, diff, risk
-  E->>S: Approve
-  S->>W: interaction callback
+  W->>T: message: cause, evidence, diff, risk + buttons
+  E->>T: Approve
+  T->>W: callback_query
   W->>G: merge PR #42
   G->>A: webhook
   A->>K: apply fix
   W->>K: watch rollout + restarts for 3 min
-  W->>S: ✅ resolved in 2m14s
+  W->>T: ✅ resolved in 2m14s
   W->>G: commit postmortem
 </pre>
       </div>
-      <figcaption>Claude only reads during investigation. The single mutation (step 19, the merge) happens after a human clicks Approve.</figcaption>
+      <figcaption>The model never touches the cluster. It only asks for tool calls; the agent runs them, and every tool is read-only. The single change (step 22, the merge) happens after a human taps Approve.</figcaption>
     </figure>
   </section>
 
@@ -402,7 +420,7 @@ sequenceDiagram
         </dl></div></details>
       <details class="comp"><summary><div class="row"><h3>Incident manager</h3><span class="tag">Agent core</span></div><span class="one">Owns the state machine and the record.</span></summary>
         <div class="body"><dl>
-          <dt>In</dt><dd>Signals, agent results, Slack callbacks.</dd>
+          <dt>In</dt><dd>Signals, agent results, Telegram button callbacks.</dd>
           <dt>Out</dt><dd>State transitions with timestamps; drives the next step.</dd>
           <dt>Tech</dt><dd>SQLite (incidents, transitions, tool calls), asyncio worker queue, one worker per incident.</dd>
         </dl></div></details>
@@ -410,25 +428,33 @@ sequenceDiagram
         <div class="body"><dl>
           <dt>In</dt><dd>Signal + last 20 events for the workload.</dd>
           <dt>Out</dt><dd><code>{actionable, category, severity}</code></dd>
-          <dt>Tech</dt><dd><code>claude-haiku-5-5</code>, structured output, no tools.</dd>
+          <dt>Tech</dt><dd><code>gpt-oss-20b</code>, JSON output, no tools.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>LLM client</h3><span class="tag">Agent core</span></div><span class="one">One client, two backends. Swapping is a config change.</span></summary>
+        <div class="body"><dl>
+          <dt>API</dt><dd>OpenAI-compatible Chat Completions with <code>tools</code>. Groq and Ollama both serve it.</dd>
+          <dt>Config</dt><dd><code>LLM_BASE_URL</code>, <code>LLM_API_KEY</code>, <code>MODEL_FAST</code>, <code>MODEL_SMART</code>. Groq: <code>https://api.groq.com/openai/v1</code>, <code>openai/gpt-oss-120b</code>. Ollama: <code>http://ollama:11434/v1</code>, <code>gpt-oss:120b</code>.</dd>
+          <dt>Does</dt><dd>Own ~150-line tool loop, retries with backoff (Groq rate limits), JSON validation with one repair retry, token + latency logging per call.</dd>
+          <dt>Tech</dt><dd><code>openai</code> Python SDK with a custom <code>base_url</code>. No agent framework.</dd>
         </dl></div></details>
       <details class="comp"><summary><div class="row"><h3>Investigator</h3><span class="tag">Agent core</span></div><span class="one">Finds the root cause and the change that caused it.</span></summary>
         <div class="body"><dl>
           <dt>Tools</dt><dd><code>k8s_get</code> <code>k8s_describe</code> <code>k8s_logs</code> <code>k8s_events</code> <code>prom_query</code> <code>git_log</code> <code>git_diff</code> <code>argocd_history</code> <code>runbook_search</code>. All read-only.</dd>
           <dt>Out</dt><dd><code>{root_cause, evidence[], suspect_commit, confidence, fix_class}</code></dd>
-          <dt>Tech</dt><dd><code>claude-opus-5-5</code> via Claude Agent SDK, custom tools, 15 tool-call budget.</dd>
+          <dt>Tech</dt><dd><code>gpt-oss-120b</code> through the LLM client, 15 tool-call budget, reasoning effort high.</dd>
         </dl></div></details>
       <details class="comp"><summary><div class="row"><h3>Fixer + validation gate</h3><span class="tag">Loop</span></div><span class="one">Writes the patch and proves it is safe to propose.</span></summary>
         <div class="body"><dl>
           <dt>In</dt><dd>Diagnosis + manifests repo checkout.</dd>
           <dt>Gate</dt><dd><code>kustomize build</code> → <code>kubeconform</code> → <code>kubectl apply --dry-run=server</code> → <code>kyverno apply</code> → blast radius (which Deployments/Services change).</dd>
-          <dt>Out</dt><dd>Branch + GitHub PR with diagnosis in the description.</dd>
+          <dt>Out</dt><dd>Branch + PR with the diagnosis in the description. A small <code>GitHost</code> interface covers GitHub now and Gitea later (Gitea's API is close to GitHub's).</dd>
         </dl></div></details>
-      <details class="comp"><summary><div class="row"><h3>Slack approval</h3><span class="tag">Loop</span></div><span class="one">The human checkpoint, and the main UI.</span></summary>
+      <details class="comp"><summary><div class="row"><h3>Telegram approval bot</h3><span class="tag">Loop</span></div><span class="one">The human checkpoint, and the main UI.</span></summary>
         <div class="body"><dl>
-          <dt>Card</dt><dd>Root cause, top 3 evidence lines, suspect commit link, diff, gate results, risk level.</dd>
-          <dt>Buttons</dt><dd>Approve (merges PR) · Reject (asks for a reason, goes back to investigator) · Explain more (threaded answer).</dd>
-          <dt>Tech</dt><dd>Slack Bolt for Python, Socket Mode (no public URL needed at the venue).</dd>
+          <dt>Message</dt><dd>Root cause, top 3 evidence lines, suspect commit link, gate results, risk level. The diff goes in a code block; if it's longer than Telegram's 4096-character limit, it's attached as a <code>.diff</code> file.</dd>
+          <dt>Buttons</dt><dd>Inline keyboard: Approve (merges PR) · Reject (bot asks for a reason as a reply, goes back to investigator) · Explain more (reply in the same chat).</dd>
+          <dt>Access</dt><dd>Posts to one team group chat. Only allowlisted Telegram user IDs can press Approve; everyone else gets "not authorized".</dd>
+          <dt>Tech</dt><dd><code>python-telegram-bot</code>, long polling (no public URL needed at the venue). Behind a <code>Notifier</code> interface so the channel can be swapped.</dd>
         </dl></div></details>
       <details class="comp"><summary><div class="row"><h3>Verifier</h3><span class="tag">Loop</span></div><span class="one">Closes the loop or undoes the fix.</span></summary>
         <div class="body"><dl>
@@ -452,6 +478,26 @@ sequenceDiagram
     </div>
   </section>
 
+  <section id="closednet">
+    <header><div class="eyebrow">Where this ends up</div><h2>Closed-network path</h2><p class="muted">The target is an air-gapped network. Everything that calls the internet sits behind a small interface, so the move is configuration, not a rewrite.</p></header>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Piece</th><th>Hackathon</th><th>Closed network</th><th>Swap point</th></tr></thead>
+      <tbody>
+        <tr><td class="k">LLM</td><td>Groq · <code>openai/gpt-oss-120b</code> + <code>gpt-oss-20b</code></td><td>Ollama · <code>gpt-oss:120b</code> + <code>gpt-oss:20b</code></td><td><code>LLM_BASE_URL</code>, model names</td></tr>
+        <tr><td class="k">Approvals</td><td>Telegram bot</td><td><span class="pill open">decide</span> Mattermost or Rocket.Chat bot, or a small web approval page</td><td><code>Notifier</code> interface</td></tr>
+        <tr><td class="k">Git server</td><td>GitHub</td><td>Gitea or GitLab, self-hosted</td><td><code>GitHost</code> interface</td></tr>
+        <tr><td class="k">Container images</td><td>Docker Hub, quay.io, ghcr.io</td><td>Internal registry (Harbor) with mirrored images</td><td>kind/containerd mirror config</td></tr>
+        <tr><td class="k">Python packages + CLIs</td><td>PyPI, GitHub releases</td><td>Wheelhouse / PyPI mirror; kubeconform, kyverno, kustomize binaries baked into the agent image</td><td>Dockerfile</td></tr>
+      </tbody>
+    </table></div>
+    <div class="rails">
+      <div class="rail"><h3>Same weights on both sides</h3><p>gpt-oss runs on Groq and in Ollama. Prompts and the fault catalog tuned at the hackathon carry straight over. Test with Ollama on a laptop early (20b runs in about 16 GB) to catch differences in tool-call formatting.</p></div>
+      <div class="rail"><h3>Telegram can't run air-gapped</h3><p>Telegram's Bot API lives on the public internet. On the closed network the <code>Notifier</code> must point to a self-hosted chat or a web page. Pick one before the hackathon ends so the interface fits it.</p></div>
+      <div class="rail"><h3>GPU sizing</h3><p><code>gpt-oss:120b</code> needs roughly 80 GB of GPU memory (one H100 / A100 80GB). <code>gpt-oss:20b</code> fits a 16–24 GB card and can also run investigation if no large GPU is available, with lower accuracy.</p></div>
+      <div class="rail"><h3>Data stays inside</h3><p>At the hackathon, logs and manifests go to Groq, so only use the demo cluster. On the closed network nothing leaves it.</p></div>
+    </div>
+  </section>
+
   <section id="safety">
     <header><div class="eyebrow">Would you let this touch prod?</div><h2>Guardrails</h2></header>
     <div class="rails">
@@ -460,6 +506,7 @@ sequenceDiagram
       <div class="rail"><h3>Fix allowlist</h3><p>Resources, image tag, env/ConfigMap refs, probes, selectors, replicas. Anything else is escalated.</p></div>
       <div class="rail"><h3>Validation gate</h3><p>Schema check, server-side dry-run and Kyverno policies all run before a human ever sees the PR.</p></div>
       <div class="rail"><h3>Scope and rate limits</h3><p>Namespace allowlist, at most 1 open PR per workload, 5 PRs per hour, 15 tool calls per investigation.</p></div>
+      <div class="rail"><h3>Approver allowlist</h3><p>Only listed Telegram user IDs can approve or reject. The bot ignores everyone else in the chat.</p></div>
       <div class="rail"><h3>Untrusted inputs</h3><p>Logs and events are wrapped as data in prompts and never followed as instructions. Tools cannot write, so a prompt injection in a log has nothing to act on.</p></div>
     </div>
   </section>
@@ -488,19 +535,21 @@ sequenceDiagram
       <thead><tr><th>Decision</th><th>Options</th><th>Recommended</th><th>Why</th></tr></thead>
       <tbody>
         <tr><td class="k">Fault injection</td><td>git commits · <code>kubectl</code> edits</td><td><span class="pill rec">git commits</span></td><td>ArgoCD self-heal silently undoes kubectl edits. Commits also give the agent a real "what changed?".</td></tr>
-        <tr><td class="k">Language</td><td>Python · TypeScript</td><td><span class="pill rec">Python</span></td><td>Claude Agent SDK, <code>kubernetes</code> client and Slack Bolt are all first-class in Python.</td></tr>
-        <tr><td class="k">Models</td><td>one model · split by step</td><td><span class="pill rec">split</span></td><td><code>claude-haiku-5-5</code> for triage (fast, cheap); <code>claude-opus-5-5</code> for investigation and fixes.</td></tr>
+        <tr><td class="k">Language</td><td>Python · TypeScript</td><td><span class="pill rec">Python</span></td><td><code>openai</code> SDK, <code>kubernetes</code> client and <code>python-telegram-bot</code> are all first-class in Python.</td></tr>
+        <tr><td class="k">Models</td><td>gpt-oss · Llama 3.3 70B · Qwen3</td><td><span class="pill rec">gpt-oss 120b + 20b</span></td><td>Available on both Groq and Ollama with the same weights, good at tool calling, open license. 20b for triage, 120b for investigation and fixes.</td></tr>
+        <tr><td class="k">Agent framework</td><td>own loop on <code>openai</code> SDK · LangGraph · PydanticAI</td><td><span class="pill rec">own loop</span></td><td>The loop is small, easy to debug on stage, and has no extra dependencies to mirror on the closed network.</td></tr>
         <tr><td class="k">K8s tools</td><td>own thin tools · existing K8s MCP server</td><td><span class="pill rec">own tools</span></td><td>Read-only by construction, smaller outputs (fewer tokens), easy to log for the demo.</td></tr>
         <tr><td class="k">GitOps engine</td><td>ArgoCD · Flux</td><td><span class="pill rec">ArgoCD</span></td><td>Its UI shows the sync live during the demo.</td></tr>
         <tr><td class="k">Manifest format</td><td>Kustomize · Helm</td><td><span class="pill rec">Kustomize</span></td><td>Plain YAML is easy for the model to patch and for judges to read in a diff.</td></tr>
         <tr><td class="k">Approval mode</td><td>always human · auto for low risk</td><td><span class="pill rec">always human</span></td><td>Safer story. Show an auto-approve flag for one fix class as a stretch goal.</td></tr>
-        <tr><td class="k">Demo cluster</td><td>kind on laptop · cloud cluster</td><td><span class="pill rec">kind</span></td><td>No dependency on venue Wi-Fi apart from the Claude API. Record a backup video.</td></tr>
+        <tr><td class="k">Demo cluster</td><td>kind on laptop · cloud cluster</td><td><span class="pill rec">kind</span></td><td>Only Groq and Telegram need the internet. Record a backup video.</td></tr>
         <tr><td class="k">Logs</td><td><code>kubectl logs</code> · Loki</td><td><span class="pill rec">kubectl logs</span></td><td>Enough for every scenario. Add Loki only if time allows.</td></tr>
         <tr><td class="k">Runbook search</td><td>agent greps files · vector DB</td><td><span class="pill rec">grep</span></td><td>Tens of documents don't need embeddings, and there's one fewer moving part.</td></tr>
         <tr><td class="k">State store</td><td>SQLite · Redis · Postgres</td><td><span class="pill rec">SQLite</span></td><td>Single process, zero ops, and the scoreboard reads it directly.</td></tr>
-        <tr><td class="k">Slack transport</td><td>Socket Mode · public webhook</td><td><span class="pill rec">Socket Mode</span></td><td>Works behind venue NAT without ngrok.</td></tr>
+        <tr><td class="k">Telegram transport</td><td>long polling · webhook</td><td><span class="pill rec">long polling</span></td><td>Works behind venue NAT without ngrok.</td></tr>
+        <tr><td class="k">Closed-network chat</td><td>Mattermost · Rocket.Chat · web approval page</td><td><span class="pill open">team call</span></td><td>Telegram needs the internet. Decide early so the <code>Notifier</code> interface fits the replacement.</td></tr>
         <tr><td class="k">Verify window</td><td>1 · 3 · 5 min</td><td><span class="pill open">team call</span></td><td>Longer is more convincing, shorter is better for the demo. Make it a flag (3 min real, 45s on stage).</td></tr>
-        <tr><td class="k">Project name</td><td>—</td><td><span class="pill open">team call</span></td><td>Needed for the repo, Slack bot and slides.</td></tr>
+        <tr><td class="k">Project name</td><td>—</td><td><span class="pill open">team call</span></td><td>Needed for the repo, Telegram bot and slides.</td></tr>
         <tr><td class="k">Hackathon length · team size</td><td>—</td><td><span class="pill open">confirm</span></td><td>The work split below assumes 24h and 4 people.</td></tr>
       </tbody>
     </table></div>
@@ -512,10 +561,11 @@ sequenceDiagram
 agent/
   ingest/          <span class="c"># watcher + alertmanager webhook</span>
   incidents/       <span class="c"># state machine, sqlite models</span>
-  llm/             <span class="c"># triage, investigator, fixer prompts + Agent SDK setup</span>
+  llm/             <span class="c"># OpenAI-compatible client, tool loop, prompts (Groq / Ollama via config)</span>
   tools/           <span class="c"># read-only k8s, prom, git, argocd, runbook tools</span>
   gate/            <span class="c"># kubeconform, dry-run, kyverno, blast radius</span>
-  slack/           <span class="c"># Bolt app, Block Kit cards</span>
+  notify/          <span class="c"># Notifier interface; telegram.py now, mattermost.py later</span>
+  githost/         <span class="c"># GitHost interface; github.py now, gitea.py later</span>
   verify/
 chaos/             <span class="c"># fault catalog as code + CLI</span>
 scoreboard/        <span class="c"># tiny web page over sqlite</span>
@@ -531,13 +581,13 @@ runbooks/          <span class="c"># seeded runbooks + generated postmortems</sp
     <header><div class="eyebrow">Assumes 24h · 4 people</div><h2>Work split</h2></header>
     <div class="lanes">
       <div class="lane"><div class="who">Platform<span>infra + GitOps</span></div><ul><li>kind + ArgoCD + Prometheus + Kyverno bootstrap, <code>make up / reset</code></li><li>Demo app and manifests repo, agent RBAC</li><li>Then: chaos injectors for each fault</li></ul></div>
-      <div class="lane"><div class="who">Agent core<span>LLM + tools</span></div><ul><li>Read-only tools, investigator prompt, diagnosis schema</li><li>Triage, tool-call logging, token/latency budget</li><li>Then: fixer prompt + fix allowlist</li></ul></div>
-      <div class="lane"><div class="who">Loop<span>incidents, gate, Slack, verify</span></div><ul><li>Watcher, incident state machine, SQLite</li><li>Validation gate, PR creation, Slack card + buttons</li><li>Verifier, revert path, postmortem</li></ul></div>
+      <div class="lane"><div class="who">Agent core<span>LLM + tools</span></div><ul><li>LLM client + tool loop, read-only tools, investigator prompt, diagnosis schema</li><li>Triage, tool-call logging, token/latency budget, one run against local Ollama</li><li>Then: fixer prompt + fix allowlist</li></ul></div>
+      <div class="lane"><div class="who">Loop<span>incidents, gate, Telegram, verify</span></div><ul><li>Watcher, incident state machine, SQLite</li><li>Validation gate, PR creation, Telegram message + inline buttons</li><li>Verifier, revert path, postmortem</li></ul></div>
       <div class="lane"><div class="who">Demo + pitch<span>story, board, tests</span></div><ul><li>Scoreboard page, scenario tests</li><li>Slides, demo script, backup recording</li><li>Run the full catalog every few hours; report failures to Agent core</li></ul></div>
     </div>
     <div class="milestones">
       <div class="ms"><span class="when">M1 · hour 4</span><h3>Cluster + GitOps</h3><p>A manual bad commit breaks the app and ArgoCD shows it.</p></div>
-      <div class="ms"><span class="when">M2 · hour 10</span><h3>Diagnosis in Slack</h3><p>The OOM fault produces a correct root cause card. No fix yet.</p></div>
+      <div class="ms"><span class="when">M2 · hour 10</span><h3>Diagnosis in Telegram</h3><p>The OOM fault produces a correct root cause card. No fix yet.</p></div>
       <div class="ms"><span class="when">M3 · hour 16</span><h3>Full loop</h3><p>PR → approve → sync → verified, plus the revert path on one fault.</p></div>
       <div class="ms"><span class="when">M4 · hour 21</span><h3>Demo ready</h3><p>6+ of 8 faults green, barrage works, rehearsed twice, video recorded.</p></div>
     </div>
@@ -550,16 +600,19 @@ runbooks/          <span class="c"># seeded runbooks + generated postmortems</sp
       <tbody>
         <tr><td class="k">Live demo flakes</td><td>Pre-pulled images in kind, <code>make reset</code> rehearsed, backup video, the demo uses the 3 most reliable faults.</td></tr>
         <tr><td class="k">Model proposes a wrong fix</td><td>The validation gate, a human approves every fix, and the verifier reverts. Show this happening once on purpose.</td></tr>
-        <tr><td class="k">LLM latency on stage</td><td>Stream tool calls into the Slack thread so the wait looks like work. Haiku triage keeps the first response fast.</td></tr>
-        <tr><td class="k">Venue Wi-Fi</td><td>Everything local except the Claude API; phone hotspot as backup.</td></tr>
-        <tr><td class="k">Scope creep</td><td>Multi-cluster, custom UI and auth are out. Slack + PRs is the UI.</td></tr>
+        <tr><td class="k">Open model is less reliable at tool calling</td><td>Few tools with tight JSON schemas, validate every tool call and diagnosis, one repair retry, then escalate. The fault catalog measures it.</td></tr>
+        <tr><td class="k">Groq rate limits</td><td>Use a paid key or a dev-tier key for the demo; backoff on 429; Ollama on a laptop as a fallback endpoint.</td></tr>
+        <tr><td class="k">LLM latency on stage</td><td>Groq is fast. Post each step to the Telegram chat as it happens ("checking logs…") so the wait looks like work.</td></tr>
+        <tr><td class="k">Venue Wi-Fi</td><td>Only Groq and Telegram need the internet; phone hotspot as backup.</td></tr>
+        <tr><td class="k">Scope creep</td><td>Multi-cluster, custom UI and auth are out. Telegram + PRs is the UI.</td></tr>
       </tbody>
     </table></div>
     <div class="qa">
       <div><b>"How is this different from k8sgpt or HolmesGPT?"</b><p>They explain problems. This system fixes them: it ties the failure to the commit that caused it, ships the fix through GitOps, and proves the fix worked or reverts it.</p></div>
       <div><b>"What if the agent is wrong?"</b><p>It cannot change anything without a merged PR. A wrong fix fails verification and gets reverted automatically.</p></div>
       <div><b>"Does it work on real clusters?"</b><p>It needs only read-only RBAC and a GitOps repo. That is a common production setup.</p></div>
-      <div><b>"What does it cost per incident?"</b><p>Log tokens per incident on the scoreboard and quote the real number.</p></div>
+      <div><b>"Can it run air-gapped?"</b><p>Yes. It runs on open-weight models through Ollama, with a self-hosted git server and chat. Nothing leaves the network.</p></div>
+      <div><b>"What does it cost per incident?"</b><p>Log tokens per incident on the scoreboard and quote the real number. On the closed network the only cost is the GPU.</p></div>
     </div>
   </section>
 

@@ -1,5 +1,7 @@
 # Plan: Self-Healing Kubernetes Agent — Architecture & Design Doc
 
+> **Stack update (2026-11-14):** Slack is replaced by a **Telegram bot**, and Claude by **gpt-oss-120b / gpt-oss-20b**, called through the OpenAI-compatible API on **Groq** (hackathon) and **Ollama** (closed network). [architecture.html](architecture.html) and [diagrams.md](diagrams.md) are current; this outline is kept for history.
+
 ## Context
 The team is entering an "AI Agents" hackathon. The chosen idea is a self-healing loop for Kubernetes:
 detect → diagnose ("what changed?") → propose fix as GitOps PR → human approves in Slack → ArgoCD applies → verify (or auto-rollback),
