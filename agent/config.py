@@ -2,9 +2,10 @@
 
 from functools import lru_cache
 from pathlib import Path
+from typing import Annotated
 
 from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -23,7 +24,8 @@ class Settings(BaseSettings):
     # Cluster access. Two identities, see infra/rbac/agent.yaml.
     kubeconfig_read: Path = ROOT / ".work/devon-agent.kubeconfig"
     kubeconfig_gate: Path = ROOT / ".work/devon-gate.kubeconfig"
-    watch_namespaces: list[str] = ["demo"]
+    # NoDecode: read "a,b" as a comma list instead of requiring JSON.
+    watch_namespaces: Annotated[list[str], NoDecode] = ["demo"]
     prometheus_url: str = "http://localhost:9090"
     alertmanager_url: str = "http://localhost:9093"
     argocd_namespace: str = "argocd"
@@ -39,7 +41,7 @@ class Settings(BaseSettings):
     # Approvals.
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
-    telegram_approvers: list[int] = []
+    telegram_approvers: Annotated[list[str], NoDecode] = []  # numeric user IDs and/or @usernames
 
     # Behaviour.
     agent_host: str = "0.0.0.0"
@@ -66,7 +68,7 @@ class Settings(BaseSettings):
         if isinstance(v, str):
             return [x.strip() for x in v.split(",") if x.strip()]
         if isinstance(v, int):
-            return [v]
+            return [str(v)]
         return v
 
     @property

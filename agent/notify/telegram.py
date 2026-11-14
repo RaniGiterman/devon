@@ -19,8 +19,10 @@ MAX_MSG = 3800
 
 
 class TelegramNotifier:
-    def __init__(self, token: str, chat_id: str, approvers: list[int], web_url: str = ""):
-        self.chat_id, self.approvers, self.web_url = chat_id, set(approvers), web_url
+    def __init__(self, token: str, chat_id: str, approvers: list[str], web_url: str = ""):
+        # Accept numeric user IDs and @usernames. IDs are safer: usernames can be changed or given up.
+        self.chat_id, self.web_url = chat_id, web_url
+        self.approvers = {str(a).strip().lstrip("@").lower() for a in approvers if str(a).strip()}
         self.app = Application.builder().token(token).build()
         self.handler: ApprovalHandler | None = None
 
@@ -70,7 +72,11 @@ class TelegramNotifier:
         await self._send(card, reply_markup=kb)
 
     def _authorized(self, user) -> bool:
-        return not self.approvers or (user and user.id in self.approvers)
+        if not self.approvers:
+            return True
+        if not user:
+            return False
+        return str(user.id) in self.approvers or bool(user.username and user.username.lower() in self.approvers)
 
     async def _on_button(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
         q = update.callback_query
