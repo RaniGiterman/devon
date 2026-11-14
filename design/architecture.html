@@ -1,0 +1,570 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Self-Healing K8s Agent</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&family=Schibsted+Grotesk:wght@600;800&display=swap">
+<style>
+/* Layout: single reading column (~64rem) with wide figures; sticky section nav on desktop. */
+:root {
+  --bg: #f4f6f8;
+  --surface: #ffffff;
+  --sunk: #e9edf1;
+  --fg: #14202b;
+  --muted: #56636f;
+  --line: #cfd7df;
+  --accent: #2f62d8;        /* the agent loop */
+  --accent-soft: #e2eafb;
+  --human: #b86e00;         /* the human approval step */
+  --human-soft: #fbefdc;
+  --ok: #1f7a4a; --ok-soft: #ddf1e6;
+  --warn: #9a6a00; --warn-soft: #fbf0d6;
+  --bad: #b3372b; --bad-soft: #f8e1de;
+  --font-display: "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --font-body: "IBM Plex Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0f151b; --surface: #161e26; --sunk: #1c2630; --fg: #e3e9ef; --muted: #96a3af; --line: #2c3946;
+  --accent: #7ea2f2; --accent-soft: #1b2a47; --human: #f0ae4a; --human-soft: #3a2a12;
+  --ok: #6fcf98; --ok-soft: #14301f; --warn: #e8c15a; --warn-soft: #33290f; --bad: #f08a7e; --bad-soft: #3a1a17;
+  color-scheme: dark;
+}}
+:root[data-theme="dark"] {
+  --bg: #0f151b; --surface: #161e26; --sunk: #1c2630; --fg: #e3e9ef; --muted: #96a3af; --line: #2c3946;
+  --accent: #7ea2f2; --accent-soft: #1b2a47; --human: #f0ae4a; --human-soft: #3a2a12;
+  --ok: #6fcf98; --ok-soft: #14301f; --warn: #e8c15a; --warn-soft: #33290f; --bad: #f08a7e; --bad-soft: #3a1a17;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-body); font-size: 15.5px; line-height: 1.6; }
+.wrap { max-width: 68rem; margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 40px 80px; display: grid; gap: 56px; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; line-height: 1.15; margin: 0; }
+h1 { font-size: clamp(2rem, 5vw, 3.1rem); font-weight: 800; letter-spacing: -0.02em; }
+h2 { font-size: 1.6rem; font-weight: 800; letter-spacing: -0.01em; }
+h3 { font-size: 1.05rem; font-weight: 600; }
+p { margin: 0; max-width: 65ch; }
+code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+code { background: var(--sunk); padding: 1px 5px; border-radius: 4px; }
+.eyebrow { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+section { display: grid; gap: 18px; scroll-margin-top: 24px; }
+section > header { display: grid; gap: 6px; }
+.lede { font-size: 1.12rem; color: var(--fg); }
+.muted { color: var(--muted); }
+
+/* Hero */
+.hero { display: grid; gap: 18px; padding-bottom: 8px; border-bottom: 1px solid var(--line); padding-block-end: 32px; }
+.loop { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-family: var(--font-mono); font-size: 0.82rem; }
+.loop span { padding: 4px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent); }
+.loop span.h { background: var(--human-soft); color: var(--human); }
+.loop i { color: var(--muted); font-style: normal; }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 24px; font-size: 0.88rem; color: var(--muted); }
+.meta b { color: var(--fg); font-weight: 600; }
+
+nav.toc { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 0.88rem; }
+nav.toc a { color: var(--muted); text-decoration: none; border-bottom: 1px solid transparent; }
+nav.toc a:hover, nav.toc a:focus-visible { color: var(--accent); border-color: var(--accent); outline: none; }
+
+/* Demo story */
+.story { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; counter-reset: s; }
+.story li { list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 14px; display: grid; gap: 4px; align-content: start; }
+.story { padding: 0; margin: 0; }
+.story .t { font-family: var(--font-mono); font-size: 0.75rem; color: var(--accent); }
+.story li.h .t { color: var(--human); }
+.story li p { font-size: 0.9rem; color: var(--muted); }
+
+/* Figures */
+figure { margin: 0; display: grid; gap: 10px; }
+.fig-scroll { overflow-x: auto; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; }
+.fig-scroll svg { display: block; width: 100%; min-width: 760px; height: auto; color: var(--fg); }
+.fig-scroll pre.mermaid { margin: 0; min-width: 640px; background: transparent; }
+figcaption { font-size: 0.88rem; color: var(--muted); max-width: 75ch; }
+svg text { font-family: var(--font-body); fill: currentColor; }
+svg .zone { fill: var(--sunk); stroke: var(--line); }
+svg .zone-label { font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.06em; fill: var(--muted); }
+svg .box { fill: var(--surface); stroke: var(--line); stroke-width: 1.2; }
+svg .box.agent { stroke: var(--accent); stroke-width: 1.5; }
+svg .box.human { fill: var(--human-soft); stroke: var(--human); stroke-width: 1.5; }
+svg .box.git { fill: var(--accent-soft); stroke: var(--accent); stroke-width: 1.5; }
+svg .t1 { font-size: 13px; font-weight: 600; }
+svg .t2 { font-size: 11px; fill: var(--muted); }
+svg .edge { stroke: var(--fg); stroke-width: 1.3; fill: none; }
+svg .edge.read { stroke: var(--muted); stroke-dasharray: 5 4; }
+svg .edge.loop { stroke: var(--accent); stroke-width: 1.6; }
+svg .edge.human { stroke: var(--human); stroke-width: 1.6; }
+svg .lbl { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
+svg .lbl.human { fill: var(--human); }
+svg .lbl.loop { fill: var(--accent); }
+svg .ah { fill: var(--fg); } svg .ah.read { fill: var(--muted); } svg .ah.loop { fill: var(--accent); } svg .ah.human { fill: var(--human); }
+
+/* Components */
+.comp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+details.comp { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 0; min-width: 0; }
+details.comp[open] { border-color: var(--accent); }
+details.comp summary { cursor: pointer; padding: 12px 14px; display: grid; gap: 2px; list-style: none; }
+details.comp summary::-webkit-details-marker { display: none; }
+details.comp summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
+details.comp summary .row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+details.comp summary .tag { font-family: var(--font-mono); font-size: 0.72rem; color: var(--muted); white-space: nowrap; }
+details.comp summary .one { font-size: 0.88rem; color: var(--muted); }
+details.comp .body { padding: 0 14px 14px; display: grid; gap: 8px; font-size: 0.9rem; }
+details.comp dl { margin: 0; display: grid; grid-template-columns: 5.5em 1fr; gap: 4px 10px; }
+details.comp dt { font-family: var(--font-mono); font-size: 0.75rem; color: var(--muted); padding-top: 2px; }
+details.comp dd { margin: 0; min-width: 0; }
+
+/* Tables */
+.table-scroll { overflow-x: auto; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.9rem; }
+th, td { text-align: left; vertical-align: top; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+th { font-family: var(--font-mono); font-size: 0.72rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); font-weight: 500; background: var(--sunk); }
+tr:last-child td { border-bottom: 0; }
+td.k { font-weight: 600; white-space: nowrap; }
+.pill { display: inline-block; font-family: var(--font-mono); font-size: 0.72rem; padding: 2px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.rec { background: var(--ok-soft); color: var(--ok); }
+.pill.open { background: var(--warn-soft); color: var(--warn); }
+.pill.esc { background: var(--bad-soft); color: var(--bad); }
+.pill.easy { background: var(--ok-soft); color: var(--ok); }
+.pill.med { background: var(--warn-soft); color: var(--warn); }
+.pill.hard { background: var(--bad-soft); color: var(--bad); }
+
+/* Guardrails */
+.rails { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.rail { border-top: 2px solid var(--fg); padding-top: 10px; display: grid; gap: 4px; }
+.rail p { font-size: 0.9rem; color: var(--muted); }
+
+/* Code-ish tree */
+pre.tree { margin: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 16px; overflow-x: auto; font-family: var(--font-mono); font-size: 0.84rem; line-height: 1.55; }
+pre.tree .c { color: var(--muted); }
+
+/* Timeline */
+.lanes { display: grid; gap: 10px; }
+.lane { display: grid; grid-template-columns: 11rem 1fr; gap: 12px; align-items: start; }
+.lane .who { font-weight: 600; font-size: 0.92rem; }
+.lane .who span { display: block; font-weight: 400; color: var(--muted); font-size: 0.8rem; }
+.lane ul { margin: 0; padding-left: 1.1em; font-size: 0.9rem; }
+.milestones { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.ms { background: var(--surface); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 4px; }
+.ms .when { font-family: var(--font-mono); font-size: 0.75rem; color: var(--accent); font-variant-numeric: tabular-nums; }
+.ms p { font-size: 0.88rem; color: var(--muted); }
+
+.qa { display: grid; gap: 14px; }
+.qa div { display: grid; gap: 2px; }
+.qa b { font-weight: 600; }
+.qa p { color: var(--muted); font-size: 0.92rem; }
+
+@media (max-width: 640px) {
+  .lane { grid-template-columns: 1fr; gap: 4px; }
+  .wrap { gap: 44px; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+
+  <header class="hero">
+    <div class="eyebrow">Hackathon design doc · theme: AI Agents</div>
+    <h1>Self-Healing K8s Agent</h1>
+    <p class="lede">An agent that notices when a workload breaks, figures out which change broke it, and opens a fix as a pull request. A human approves it in Slack, ArgoCD rolls it out, and the agent confirms the problem is gone. If it isn't, the agent reverts its own fix.</p>
+    <div class="loop" aria-label="The loop">
+      <span>detect</span><i>→</i><span>diagnose: what changed?</span><i>→</i><span>fix as PR</span><i>→</i><span class="h">human approves</span><i>→</i><span>ArgoCD applies</span><i>→</i><span>verify or revert</span>
+    </div>
+    <div class="meta">
+      <div>Working name <b>TBD</b> (see decisions)</div>
+      <div>Assumes <b>24h</b> hackathon, <b>4 people</b></div>
+      <div>Demo cluster <b>kind</b> on a laptop</div>
+    </div>
+    <nav class="toc" aria-label="Sections">
+      <a href="#demo">Demo story</a><a href="#arch">Architecture</a><a href="#states">Incident lifecycle</a><a href="#sequence">One incident</a><a href="#components">Components</a><a href="#safety">Guardrails</a><a href="#scenarios">Fault catalog</a><a href="#decisions">Decisions</a><a href="#repo">Repo layout</a><a href="#plan">Work split</a><a href="#risks">Risks</a>
+    </nav>
+  </header>
+
+  <section id="demo">
+    <header><div class="eyebrow">What the judges see</div><h2>The 3-minute demo</h2></header>
+    <p>The judges watch the fix happen live. Each fault is injected as a git commit, the way real incidents start, so the agent's "what changed?" answer points at a real commit.</p>
+    <ol class="story">
+      <li><span class="t">0:00 · break it</span><h3>Run the chaos script</h3><p>It commits a memory limit of 64Mi to the <code>api</code> deployment. ArgoCD syncs it and pods start getting OOMKilled.</p></li>
+      <li><span class="t">0:20 · detect</span><h3>Incident opens</h3><p>The watcher sees the CrashLoopBackOff and the scoreboard shows a new red incident.</p></li>
+      <li><span class="t">0:50 · diagnose</span><h3>Root cause in Slack</h3><p>"OOMKilled since commit a1b2c3, which cut the memory limit from 512Mi to 64Mi. Peak usage is 310Mi."</p></li>
+      <li class="h"><span class="t">1:20 · approve</span><h3>One click</h3><p>The Slack card shows the PR diff, the validation results and the blast radius. An engineer clicks Approve.</p></li>
+      <li><span class="t">1:40 · verify</span><h3>Back to green</h3><p>ArgoCD syncs and the rollout completes. The agent watches for 3 minutes, then marks the incident resolved and writes a postmortem.</p></li>
+      <li><span class="t">2:30 · scale</span><h3>Fault barrage</h3><p>Five faults are injected at once. The scoreboard shows how many were resolved and the mean time to fix. One fault is deliberately escalated.</p></li>
+    </ol>
+  </section>
+
+  <section id="arch">
+    <header><div class="eyebrow">System</div><h2>Architecture</h2></header>
+    <figure>
+      <div class="fig-scroll">
+        <svg viewBox="0 0 1100 680" role="img" aria-label="Architecture: cluster signals flow into the agent pipeline. The agent reads the cluster read-only, writes only by opening PRs to the manifests repo. Humans approve in Slack, ArgoCD syncs merged changes back to the cluster.">
+          <defs>
+            <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah read" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="al" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah loop" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="ahm" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah human" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+
+          <!-- zones -->
+          <rect class="zone" x="20" y="30" width="300" height="560" rx="10"/>
+          <text class="zone-label" x="36" y="52">KIND CLUSTER</text>
+          <rect class="zone" x="360" y="30" width="380" height="560" rx="10"/>
+          <text class="zone-label" x="376" y="52">AGENT SERVICE · PYTHON + CLAUDE AGENT SDK</text>
+          <rect class="zone" x="780" y="30" width="300" height="560" rx="10"/>
+          <text class="zone-label" x="796" y="52">TEAM TOOLS</text>
+
+          <!-- cluster -->
+          <rect class="box" x="40" y="70" width="260" height="56" rx="6"/>
+          <text class="t1" x="170" y="94" text-anchor="middle">Demo app</text>
+          <text class="t2" x="170" y="112" text-anchor="middle">frontend · api · redis</text>
+          <rect class="box" x="40" y="170" width="260" height="56" rx="6"/>
+          <text class="t1" x="170" y="194" text-anchor="middle">Prometheus + Alertmanager</text>
+          <text class="t2" x="170" y="212" text-anchor="middle">kube-prometheus-stack</text>
+          <rect class="box" x="40" y="270" width="260" height="56" rx="6"/>
+          <text class="t1" x="170" y="294" text-anchor="middle">Kubernetes API</text>
+          <text class="t2" x="170" y="312" text-anchor="middle">events · pod status · logs</text>
+          <rect class="box" x="40" y="520" width="260" height="50" rx="6"/>
+          <text class="t1" x="170" y="541" text-anchor="middle">ArgoCD</text>
+          <text class="t2" x="170" y="558" text-anchor="middle">auto-sync from git</text>
+
+          <path class="edge" d="M170 126 V168" marker-end="url(#a)"/>
+          <text class="lbl" x="178" y="152">scrape</text>
+          <path class="edge" d="M170 520 V328" marker-end="url(#a)"/>
+          <text class="lbl" x="178" y="430">applies manifests</text>
+
+          <!-- agent pipeline -->
+          <rect class="box agent" x="380" y="70" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="89">Signal ingestion</text>
+          <text class="t2" x="396" y="105">watch + webhook, debounce</text>
+          <rect class="box agent" x="380" y="140" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="159">Incident manager</text>
+          <text class="t2" x="396" y="175">state machine · SQLite</text>
+          <rect class="box agent" x="380" y="210" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="229">Triage</text>
+          <text class="t2" x="396" y="245">Haiku 5.5 · noise or real?</text>
+          <rect class="box agent" x="380" y="280" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="299">Investigator</text>
+          <text class="t2" x="396" y="315">Opus 5.5 · root cause + suspect commit</text>
+          <rect class="box agent" x="380" y="350" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="369">Fixer + validation gate</text>
+          <text class="t2" x="396" y="385">patch YAML · dry-run · policy · blast radius</text>
+          <rect class="box agent" x="380" y="450" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="469">Verifier</text>
+          <text class="t2" x="396" y="485">rollout healthy and symptom gone?</text>
+          <rect class="box agent" x="380" y="520" width="320" height="44" rx="6"/>
+          <text class="t1" x="396" y="539">Postmortem writer</text>
+          <text class="t2" x="396" y="555">what broke, what fixed it</text>
+
+          <path class="edge loop" d="M540 114 V138" marker-end="url(#al)"/>
+          <path class="edge loop" d="M540 184 V208" marker-end="url(#al)"/>
+          <path class="edge loop" d="M540 254 V278" marker-end="url(#al)"/>
+          <path class="edge loop" d="M540 324 V348" marker-end="url(#al)"/>
+          <path class="edge loop" d="M540 394 V448" marker-end="url(#al)"/>
+          <text class="lbl loop" x="548" y="425">after merge + sync</text>
+          <path class="edge loop" d="M540 494 V518" marker-end="url(#al)"/>
+
+          <!-- signals in -->
+          <path class="edge" d="M300 198 L378 92" marker-end="url(#a)"/>
+          <text class="lbl" x="306" y="150">alerts</text>
+          <path class="edge" d="M300 290 L378 104" marker-end="url(#a)"/>
+          <text class="lbl" x="318" y="252">watch</text>
+
+          <!-- read-only investigation -->
+          <path class="edge read" d="M380 304 H302" marker-end="url(#ar)"/>
+          <text class="lbl" x="306" y="340">read-only:</text>
+          <text class="lbl" x="306" y="353">kubectl, PromQL</text>
+
+          <!-- external -->
+          <rect class="box human" x="800" y="140" width="260" height="56" rx="6"/>
+          <text class="t1" x="930" y="164" text-anchor="middle">Slack</text>
+          <text class="t2" x="930" y="182" text-anchor="middle">approve · reject · explain more</text>
+          <rect class="box" x="800" y="280" width="260" height="56" rx="6"/>
+          <text class="t1" x="930" y="304" text-anchor="middle">Runbooks + postmortems</text>
+          <text class="t2" x="930" y="322" text-anchor="middle">markdown in git</text>
+          <rect class="box" x="800" y="530" width="260" height="56" rx="6"/>
+          <text class="t1" x="930" y="554" text-anchor="middle">Chaos harness</text>
+          <text class="t2" x="930" y="572" text-anchor="middle">commits faults · drives scoreboard</text>
+
+          <path class="edge human" d="M700 154 H798" marker-end="url(#ahm)"/>
+          <text class="lbl human" x="712" y="146">card + diff</text>
+          <path class="edge human" d="M800 176 H702" marker-end="url(#ahm)"/>
+          <text class="lbl human" x="712" y="192">approve</text>
+          <path class="edge read" d="M700 302 H798" marker-end="url(#ar)"/>
+          <text class="lbl" x="742" y="296">search</text>
+          <path class="edge read" d="M700 542 H765 V322 H798" marker-end="url(#ar)"/>
+          <text class="lbl" x="770" y="440">writes</text>
+
+          <!-- git -->
+          <rect class="box git" x="380" y="612" width="320" height="52" rx="6"/>
+          <text class="t1" x="540" y="634" text-anchor="middle">GitHub · gitops-manifests</text>
+          <text class="t2" x="540" y="652" text-anchor="middle">single source of truth, audit trail</text>
+
+          <path class="edge loop" d="M700 372 H722 V626 H704" marker-end="url(#al)"/>
+          <path class="edge loop" d="M700 472 H722"/>
+          <text class="lbl loop" x="730" y="420">PR</text>
+          <text class="lbl loop" x="730" y="490">revert</text>
+          <path class="edge" d="M930 586 V652 H704" marker-end="url(#a)"/>
+          <text class="lbl" x="800" y="646">bad commit</text>
+          <path class="edge" d="M380 638 H170 V572" marker-end="url(#a)"/>
+          <text class="lbl" x="200" y="630">sync on merge</text>
+        </svg>
+      </div>
+      <figcaption>The agent never writes to the cluster directly. Its only write path is a PR to the manifests repo (blue lane), and a human merges it from Slack (amber). ArgoCD is the only thing that applies changes, so every fix and every revert is a commit. Dashed lines are read-only. The scoreboard reads the incident store.</figcaption>
+    </figure>
+  </section>
+
+  <section id="states">
+    <header><div class="eyebrow">Incident manager</div><h2>Incident lifecycle</h2></header>
+    <figure>
+      <div class="fig-scroll">
+<pre class="mermaid">
+stateDiagram-v2
+  direction LR
+  [*] --> DETECTED
+  DETECTED --> TRIAGED: dedup + debounce 30s
+  TRIAGED --> DROPPED: noise / self-recovered
+  TRIAGED --> INVESTIGATING: actionable
+  INVESTIGATING --> FIX_PROPOSED: confidence ≥ 0.7
+  INVESTIGATING --> ESCALATED: low confidence / not in allowlist
+  FIX_PROPOSED --> AWAITING_APPROVAL: validation gate passes
+  FIX_PROPOSED --> INVESTIGATING: validation fails (max 2 retries)
+  AWAITING_APPROVAL --> APPLYING: Approve = merge PR
+  AWAITING_APPROVAL --> INVESTIGATING: Reject + feedback
+  APPLYING --> VERIFYING: ArgoCD synced
+  VERIFYING --> RESOLVED: healthy for 3 min
+  VERIFYING --> ROLLED_BACK: symptom persists
+  ROLLED_BACK --> ESCALATED: git revert + page human
+  RESOLVED --> [*]
+  ESCALATED --> [*]
+  DROPPED --> [*]
+</pre>
+      </div>
+      <figcaption>Every incident is keyed by (namespace, workload, symptom), so 40 crashing pods count as one incident. A rejection in Slack is not a dead end: the engineer's reason goes back to the investigator as context. Every edge is a row in SQLite, which gives the scoreboard its timings for free.</figcaption>
+    </figure>
+  </section>
+
+  <section id="sequence">
+    <header><div class="eyebrow">End to end</div><h2>One incident: the bad memory limit</h2></header>
+    <figure>
+      <div class="fig-scroll">
+<pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant C as Chaos harness
+  participant G as GitHub
+  participant A as ArgoCD
+  participant K as K8s API
+  participant W as Agent
+  participant L as Claude
+  participant S as Slack
+  participant E as Engineer
+  C->>G: commit api memory 512Mi → 64Mi
+  G->>A: webhook
+  A->>K: apply Deployment
+  K-->>W: Pod OOMKilled, CrashLoopBackOff
+  W->>L: triage (Haiku)
+  L-->>W: actionable
+  W->>L: investigate (Opus + tools)
+  L->>K: describe pod, events, logs
+  L->>G: git log -p apps/api
+  L-->>W: diagnosis JSON: commit a1b2c3, peak 310Mi
+  W->>L: propose fix
+  L-->>W: patch memory 512Mi
+  W->>W: kubeconform, dry-run=server, kyverno
+  W->>G: open PR #42
+  W->>S: card: cause, evidence, diff, risk
+  E->>S: Approve
+  S->>W: interaction callback
+  W->>G: merge PR #42
+  G->>A: webhook
+  A->>K: apply fix
+  W->>K: watch rollout + restarts for 3 min
+  W->>S: ✅ resolved in 2m14s
+  W->>G: commit postmortem
+</pre>
+      </div>
+      <figcaption>Claude only reads during investigation. The single mutation (step 19, the merge) happens after a human clicks Approve.</figcaption>
+    </figure>
+  </section>
+
+  <section id="components">
+    <header><div class="eyebrow">Build list</div><h2>Components</h2><p class="muted">Open a card for its inputs, outputs and tech.</p></header>
+    <div class="comp-grid">
+      <details class="comp" open><summary><div class="row"><h3>Signal ingestion</h3><span class="tag">Platform</span></div><span class="one">Turns cluster noise into candidate incidents.</span></summary>
+        <div class="body"><dl>
+          <dt>In</dt><dd>K8s watch on Events + Pods (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending, probe failures, Service with no endpoints); Alertmanager webhook.</dd>
+          <dt>Out</dt><dd>Signal with fingerprint <code>ns/workload/symptom</code>.</dd>
+          <dt>Tech</dt><dd><code>kubernetes</code> Python client (watch), FastAPI webhook endpoint, 30s debounce.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Incident manager</h3><span class="tag">Agent core</span></div><span class="one">Owns the state machine and the record.</span></summary>
+        <div class="body"><dl>
+          <dt>In</dt><dd>Signals, agent results, Slack callbacks.</dd>
+          <dt>Out</dt><dd>State transitions with timestamps; drives the next step.</dd>
+          <dt>Tech</dt><dd>SQLite (incidents, transitions, tool calls), asyncio worker queue, one worker per incident.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Triage</h3><span class="tag">Agent core</span></div><span class="one">Cheap filter before the expensive investigation.</span></summary>
+        <div class="body"><dl>
+          <dt>In</dt><dd>Signal + last 20 events for the workload.</dd>
+          <dt>Out</dt><dd><code>{actionable, category, severity}</code></dd>
+          <dt>Tech</dt><dd><code>claude-haiku-5-5</code>, structured output, no tools.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Investigator</h3><span class="tag">Agent core</span></div><span class="one">Finds the root cause and the change that caused it.</span></summary>
+        <div class="body"><dl>
+          <dt>Tools</dt><dd><code>k8s_get</code> <code>k8s_describe</code> <code>k8s_logs</code> <code>k8s_events</code> <code>prom_query</code> <code>git_log</code> <code>git_diff</code> <code>argocd_history</code> <code>runbook_search</code>. All read-only.</dd>
+          <dt>Out</dt><dd><code>{root_cause, evidence[], suspect_commit, confidence, fix_class}</code></dd>
+          <dt>Tech</dt><dd><code>claude-opus-5-5</code> via Claude Agent SDK, custom tools, 15 tool-call budget.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Fixer + validation gate</h3><span class="tag">Loop</span></div><span class="one">Writes the patch and proves it is safe to propose.</span></summary>
+        <div class="body"><dl>
+          <dt>In</dt><dd>Diagnosis + manifests repo checkout.</dd>
+          <dt>Gate</dt><dd><code>kustomize build</code> → <code>kubeconform</code> → <code>kubectl apply --dry-run=server</code> → <code>kyverno apply</code> → blast radius (which Deployments/Services change).</dd>
+          <dt>Out</dt><dd>Branch + GitHub PR with diagnosis in the description.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Slack approval</h3><span class="tag">Loop</span></div><span class="one">The human checkpoint, and the main UI.</span></summary>
+        <div class="body"><dl>
+          <dt>Card</dt><dd>Root cause, top 3 evidence lines, suspect commit link, diff, gate results, risk level.</dd>
+          <dt>Buttons</dt><dd>Approve (merges PR) · Reject (asks for a reason, goes back to investigator) · Explain more (threaded answer).</dd>
+          <dt>Tech</dt><dd>Slack Bolt for Python, Socket Mode (no public URL needed at the venue).</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Verifier</h3><span class="tag">Loop</span></div><span class="one">Closes the loop or undoes the fix.</span></summary>
+        <div class="body"><dl>
+          <dt>Checks</dt><dd>ArgoCD app Synced + Healthy, rollout complete, restart count flat, original symptom absent for 3 min (configurable).</dd>
+          <dt>Fail</dt><dd><code>git revert</code> the fix commit, mark ROLLED_BACK → ESCALATED.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Postmortem writer</h3><span class="tag">Loop</span></div><span class="one">Each incident improves the next diagnosis.</span></summary>
+        <div class="body"><dl>
+          <dt>Out</dt><dd>Markdown postmortem (timeline, cause, fix, prevention) committed to the runbooks repo. <code>runbook_search</code> finds it next time.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Chaos harness + scoreboard</h3><span class="tag">Demo</span></div><span class="one">The fault catalog, run as a script and shown on a screen.</span></summary>
+        <div class="body"><dl>
+          <dt>CLI</dt><dd><code>chaos inject oom-limit</code>, <code>chaos barrage 5</code>, <code>chaos reset</code>.</dd>
+          <dt>Board</dt><dd>Small web page reading SQLite: open incidents, state pills, time to resolve, resolved/total.</dd>
+        </dl></div></details>
+      <details class="comp"><summary><div class="row"><h3>Platform bootstrap</h3><span class="tag">Platform</span></div><span class="one">One command from laptop to working demo.</span></summary>
+        <div class="body"><dl>
+          <dt>Make</dt><dd><code>make up</code>: kind cluster, ArgoCD, kube-prometheus-stack, Kyverno, demo app, agent RBAC.</dd>
+          <dt>Reset</dt><dd><code>make reset</code> between demo runs, under 2 min.</dd>
+        </dl></div></details>
+    </div>
+  </section>
+
+  <section id="safety">
+    <header><div class="eyebrow">Would you let this touch prod?</div><h2>Guardrails</h2></header>
+    <div class="rails">
+      <div class="rail"><h3>Read-only identity</h3><p>The agent's ServiceAccount has a ClusterRole with get/list/watch only, and no access to Secret values.</p></div>
+      <div class="rail"><h3>Writes only through git</h3><p>Every change is a reviewable PR, merged on human approval and easy to revert.</p></div>
+      <div class="rail"><h3>Fix allowlist</h3><p>Resources, image tag, env/ConfigMap refs, probes, selectors, replicas. Anything else is escalated.</p></div>
+      <div class="rail"><h3>Validation gate</h3><p>Schema check, server-side dry-run and Kyverno policies all run before a human ever sees the PR.</p></div>
+      <div class="rail"><h3>Scope and rate limits</h3><p>Namespace allowlist, at most 1 open PR per workload, 5 PRs per hour, 15 tool calls per investigation.</p></div>
+      <div class="rail"><h3>Untrusted inputs</h3><p>Logs and events are wrapped as data in prompts and never followed as instructions. Tools cannot write, so a prompt injection in a log has nothing to act on.</p></div>
+    </div>
+  </section>
+
+  <section id="scenarios">
+    <header><div class="eyebrow">Doubles as the test suite</div><h2>Fault catalog</h2></header>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Fault</th><th>Injected commit</th><th>Symptom</th><th>Expected diagnosis → fix</th><th>Difficulty</th></tr></thead>
+      <tbody>
+        <tr><td class="k">OOM limit</td><td>memory 512Mi → 64Mi</td><td>OOMKilled, CrashLoop</td><td>Limit below peak usage → restore limit (from Prometheus peak + headroom)</td><td><span class="pill easy">easy</span></td></tr>
+        <tr><td class="k">Bad image tag</td><td><code>api:1.4.2</code> → <code>api:1.4.20</code></td><td>ImagePullBackOff</td><td>Tag doesn't exist → revert to last good tag</td><td><span class="pill easy">easy</span></td></tr>
+        <tr><td class="k">Missing config key</td><td>rename <code>REDIS_URL</code> in ConfigMap</td><td>CrashLoop, log "REDIS_URL not set"</td><td>Key renamed → restore key name</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">Broken probe</td><td>liveness path <code>/healthz</code> → <code>/health</code></td><td>Restarts, probe 404 events</td><td>Probe path wrong → fix path</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">Selector mismatch</td><td>Service selector <code>app: api</code> → <code>app: api-v2</code></td><td>No endpoints, frontend 502s</td><td>Selector matches no pods → fix selector</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">NetworkPolicy block</td><td>add deny policy for redis ingress</td><td>api timeouts to redis</td><td>New policy blocks api→redis → allow rule</td><td><span class="pill hard">hard</span></td></tr>
+        <tr><td class="k">Unschedulable</td><td>cpu request 100m → 64</td><td>Pods Pending, FailedScheduling</td><td>Request exceeds node capacity → restore request</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">App bug (no config change)</td><td>new image with a real code bug</td><td>500s, stack trace in logs</td><td>Code bug, not config → <b>escalate</b> with evidence and suggest rollback</td><td><span class="pill esc">escalate</span></td></tr>
+      </tbody>
+    </table></div>
+    <p class="muted">Each row becomes a test: <code>chaos inject X</code>, assert final state and fix class within a time budget. Run all eight before the demo.</p>
+  </section>
+
+  <section id="decisions">
+    <header><div class="eyebrow">Agree on these in the first hour</div><h2>Decisions to make</h2></header>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Decision</th><th>Options</th><th>Recommended</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Fault injection</td><td>git commits · <code>kubectl</code> edits</td><td><span class="pill rec">git commits</span></td><td>ArgoCD self-heal silently undoes kubectl edits. Commits also give the agent a real "what changed?".</td></tr>
+        <tr><td class="k">Language</td><td>Python · TypeScript</td><td><span class="pill rec">Python</span></td><td>Claude Agent SDK, <code>kubernetes</code> client and Slack Bolt are all first-class in Python.</td></tr>
+        <tr><td class="k">Models</td><td>one model · split by step</td><td><span class="pill rec">split</span></td><td><code>claude-haiku-5-5</code> for triage (fast, cheap); <code>claude-opus-5-5</code> for investigation and fixes.</td></tr>
+        <tr><td class="k">K8s tools</td><td>own thin tools · existing K8s MCP server</td><td><span class="pill rec">own tools</span></td><td>Read-only by construction, smaller outputs (fewer tokens), easy to log for the demo.</td></tr>
+        <tr><td class="k">GitOps engine</td><td>ArgoCD · Flux</td><td><span class="pill rec">ArgoCD</span></td><td>Its UI shows the sync live during the demo.</td></tr>
+        <tr><td class="k">Manifest format</td><td>Kustomize · Helm</td><td><span class="pill rec">Kustomize</span></td><td>Plain YAML is easy for the model to patch and for judges to read in a diff.</td></tr>
+        <tr><td class="k">Approval mode</td><td>always human · auto for low risk</td><td><span class="pill rec">always human</span></td><td>Safer story. Show an auto-approve flag for one fix class as a stretch goal.</td></tr>
+        <tr><td class="k">Demo cluster</td><td>kind on laptop · cloud cluster</td><td><span class="pill rec">kind</span></td><td>No dependency on venue Wi-Fi apart from the Claude API. Record a backup video.</td></tr>
+        <tr><td class="k">Logs</td><td><code>kubectl logs</code> · Loki</td><td><span class="pill rec">kubectl logs</span></td><td>Enough for every scenario. Add Loki only if time allows.</td></tr>
+        <tr><td class="k">Runbook search</td><td>agent greps files · vector DB</td><td><span class="pill rec">grep</span></td><td>Tens of documents don't need embeddings, and there's one fewer moving part.</td></tr>
+        <tr><td class="k">State store</td><td>SQLite · Redis · Postgres</td><td><span class="pill rec">SQLite</span></td><td>Single process, zero ops, and the scoreboard reads it directly.</td></tr>
+        <tr><td class="k">Slack transport</td><td>Socket Mode · public webhook</td><td><span class="pill rec">Socket Mode</span></td><td>Works behind venue NAT without ngrok.</td></tr>
+        <tr><td class="k">Verify window</td><td>1 · 3 · 5 min</td><td><span class="pill open">team call</span></td><td>Longer is more convincing, shorter is better for the demo. Make it a flag (3 min real, 45s on stage).</td></tr>
+        <tr><td class="k">Project name</td><td>—</td><td><span class="pill open">team call</span></td><td>Needed for the repo, Slack bot and slides.</td></tr>
+        <tr><td class="k">Hackathon length · team size</td><td>—</td><td><span class="pill open">confirm</span></td><td>The work split below assumes 24h and 4 people.</td></tr>
+      </tbody>
+    </table></div>
+  </section>
+
+  <section id="repo">
+    <header><div class="eyebrow">Two repos</div><h2>Repo layout</h2></header>
+<pre class="tree"><span class="c"># repo 1: the agent (monorepo)</span>
+agent/
+  ingest/          <span class="c"># watcher + alertmanager webhook</span>
+  incidents/       <span class="c"># state machine, sqlite models</span>
+  llm/             <span class="c"># triage, investigator, fixer prompts + Agent SDK setup</span>
+  tools/           <span class="c"># read-only k8s, prom, git, argocd, runbook tools</span>
+  gate/            <span class="c"># kubeconform, dry-run, kyverno, blast radius</span>
+  slack/           <span class="c"># Bolt app, Block Kit cards</span>
+  verify/
+chaos/             <span class="c"># fault catalog as code + CLI</span>
+scoreboard/        <span class="c"># tiny web page over sqlite</span>
+infra/             <span class="c"># kind config, bootstrap Makefile, RBAC, kyverno policies</span>
+tests/scenarios/   <span class="c"># one test per fault in the catalog</span>
+
+<span class="c"># repo 2: gitops-manifests (watched by ArgoCD, written only via PR)</span>
+apps/frontend/  apps/api/  apps/redis/
+runbooks/          <span class="c"># seeded runbooks + generated postmortems</span></pre>
+  </section>
+
+  <section id="plan">
+    <header><div class="eyebrow">Assumes 24h · 4 people</div><h2>Work split</h2></header>
+    <div class="lanes">
+      <div class="lane"><div class="who">Platform<span>infra + GitOps</span></div><ul><li>kind + ArgoCD + Prometheus + Kyverno bootstrap, <code>make up / reset</code></li><li>Demo app and manifests repo, agent RBAC</li><li>Then: chaos injectors for each fault</li></ul></div>
+      <div class="lane"><div class="who">Agent core<span>LLM + tools</span></div><ul><li>Read-only tools, investigator prompt, diagnosis schema</li><li>Triage, tool-call logging, token/latency budget</li><li>Then: fixer prompt + fix allowlist</li></ul></div>
+      <div class="lane"><div class="who">Loop<span>incidents, gate, Slack, verify</span></div><ul><li>Watcher, incident state machine, SQLite</li><li>Validation gate, PR creation, Slack card + buttons</li><li>Verifier, revert path, postmortem</li></ul></div>
+      <div class="lane"><div class="who">Demo + pitch<span>story, board, tests</span></div><ul><li>Scoreboard page, scenario tests</li><li>Slides, demo script, backup recording</li><li>Run the full catalog every few hours; report failures to Agent core</li></ul></div>
+    </div>
+    <div class="milestones">
+      <div class="ms"><span class="when">M1 · hour 4</span><h3>Cluster + GitOps</h3><p>A manual bad commit breaks the app and ArgoCD shows it.</p></div>
+      <div class="ms"><span class="when">M2 · hour 10</span><h3>Diagnosis in Slack</h3><p>The OOM fault produces a correct root cause card. No fix yet.</p></div>
+      <div class="ms"><span class="when">M3 · hour 16</span><h3>Full loop</h3><p>PR → approve → sync → verified, plus the revert path on one fault.</p></div>
+      <div class="ms"><span class="when">M4 · hour 21</span><h3>Demo ready</h3><p>6+ of 8 faults green, barrage works, rehearsed twice, video recorded.</p></div>
+    </div>
+  </section>
+
+  <section id="risks">
+    <header><div class="eyebrow">Plan for failure</div><h2>Risks and judge questions</h2></header>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Risk</th><th>Mitigation</th></tr></thead>
+      <tbody>
+        <tr><td class="k">Live demo flakes</td><td>Pre-pulled images in kind, <code>make reset</code> rehearsed, backup video, the demo uses the 3 most reliable faults.</td></tr>
+        <tr><td class="k">Model proposes a wrong fix</td><td>The validation gate, a human approves every fix, and the verifier reverts. Show this happening once on purpose.</td></tr>
+        <tr><td class="k">LLM latency on stage</td><td>Stream tool calls into the Slack thread so the wait looks like work. Haiku triage keeps the first response fast.</td></tr>
+        <tr><td class="k">Venue Wi-Fi</td><td>Everything local except the Claude API; phone hotspot as backup.</td></tr>
+        <tr><td class="k">Scope creep</td><td>Multi-cluster, custom UI and auth are out. Slack + PRs is the UI.</td></tr>
+      </tbody>
+    </table></div>
+    <div class="qa">
+      <div><b>"How is this different from k8sgpt or HolmesGPT?"</b><p>They explain problems. This system fixes them: it ties the failure to the commit that caused it, ships the fix through GitOps, and proves the fix worked or reverts it.</p></div>
+      <div><b>"What if the agent is wrong?"</b><p>It cannot change anything without a merged PR. A wrong fix fails verification and gets reverted automatically.</p></div>
+      <div><b>"Does it work on real clusters?"</b><p>It needs only read-only RBAC and a GitOps repo. That is a common production setup.</p></div>
+      <div><b>"What does it cost per incident?"</b><p>Log tokens per incident on the scoreboard and quote the real number.</p></div>
+    </div>
+  </section>
+
+</div>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>mermaid.initialize({startOnLoad:true, theme: matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "default"});</script>
+</body>
+</html>
