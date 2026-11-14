@@ -188,7 +188,7 @@ pre.tree .c { color: var(--muted); }
       <div>Approvals <b>Telegram bot</b></div>
     </div>
     <nav class="toc" aria-label="Sections">
-      <a href="#demo">Demo story</a><a href="#arch">Architecture</a><a href="#states">Incident lifecycle</a><a href="#sequence">One incident</a><a href="#components">Components</a><a href="#closednet">Closed network</a><a href="#safety">Guardrails</a><a href="#scenarios">Fault catalog</a><a href="#decisions">Decisions</a><a href="#repo">Repo layout</a><a href="#plan">Work split</a><a href="#risks">Risks</a>
+      <a href="#demo">Demo story</a><a href="#arch">Architecture</a><a href="#detect">Detection</a><a href="#states">Incident lifecycle</a><a href="#sequence">One incident</a><a href="#components">Components</a><a href="#closednet">Closed network</a><a href="#safety">Guardrails</a><a href="#scenarios">Fault catalog</a><a href="#decisions">Decisions</a><a href="#repo">Repo layout</a><a href="#plan">Work split</a><a href="#risks">Risks</a>
     </nav>
   </header>
 
@@ -232,10 +232,10 @@ pre.tree .c { color: var(--muted); }
           <text class="t2" x="170" y="112" text-anchor="middle">frontend · api · redis</text>
           <rect class="box" x="40" y="170" width="260" height="56" rx="6"/>
           <text class="t1" x="170" y="194" text-anchor="middle">Prometheus + Alertmanager</text>
-          <text class="t2" x="170" y="212" text-anchor="middle">kube-prometheus-stack</text>
+          <text class="t2" x="170" y="212" text-anchor="middle">rules: 5xx, latency, memory, PVC usage</text>
           <rect class="box" x="40" y="270" width="260" height="56" rx="6"/>
           <text class="t1" x="170" y="294" text-anchor="middle">Kubernetes API</text>
-          <text class="t2" x="170" y="312" text-anchor="middle">events · pod status · logs</text>
+          <text class="t2" x="170" y="312" text-anchor="middle">pods · events · endpoints · nodes · logs</text>
           <rect class="box" x="40" y="520" width="260" height="50" rx="6"/>
           <text class="t1" x="170" y="541" text-anchor="middle">ArgoCD</text>
           <text class="t2" x="170" y="558" text-anchor="middle">auto-sync from git</text>
@@ -248,7 +248,7 @@ pre.tree .c { color: var(--muted); }
           <!-- agent pipeline -->
           <rect class="box agent" x="380" y="70" width="320" height="44" rx="6"/>
           <text class="t1" x="396" y="89">Signal ingestion</text>
-          <text class="t2" x="396" y="105">watch + webhook, debounce</text>
+          <text class="t2" x="396" y="105">5 detectors → Signal · dedup · debounce</text>
           <rect class="box agent" x="380" y="140" width="320" height="44" rx="6"/>
           <text class="t1" x="396" y="159">Incident manager</text>
           <text class="t2" x="396" y="175">state machine · SQLite</text>
@@ -278,9 +278,11 @@ pre.tree .c { color: var(--muted); }
 
           <!-- signals in -->
           <path class="edge" d="M300 198 L378 92" marker-end="url(#a)"/>
-          <text class="lbl" x="306" y="150">alerts</text>
+          <text class="lbl" x="306" y="150">alert webhook</text>
           <path class="edge" d="M300 290 L378 104" marker-end="url(#a)"/>
-          <text class="lbl" x="318" y="252">watch</text>
+          <text class="lbl" x="318" y="240">watch,</text>
+          <text class="lbl" x="318" y="252">log tail,</text>
+          <text class="lbl" x="318" y="264">5-min sweep</text>
 
           <!-- read-only investigation -->
           <path class="edge read" d="M380 304 H302" marker-end="url(#ar)"/>
@@ -327,8 +329,78 @@ pre.tree .c { color: var(--muted); }
           <text class="lbl" x="200" y="630">sync on merge</text>
         </svg>
       </div>
-      <figcaption>The agent never writes to the cluster directly. Its only write path is a PR to the manifests repo (blue lane), and a human merges it from Telegram (amber). ArgoCD is the only thing that applies changes, so every fix and every revert is a commit. Triage, the investigator and the fixer all call one OpenAI-compatible endpoint (purple); moving from Groq to Ollama means changing a base URL. Dashed lines are read-only. The scoreboard reads the incident store.</figcaption>
+      <figcaption>The agent never writes to the cluster directly. Its only write path is a PR to the manifests repo (blue lane), and a human merges it from Telegram (amber). ArgoCD is the only thing that applies changes, so every fix and every revert is a commit. Triage, the investigator and the fixer all call one OpenAI-compatible endpoint (purple); moving from Groq to Ollama means changing a base URL. Dashed lines are read-only. The scoreboard reads the incident store. How each problem is detected is broken out in the next section.</figcaption>
     </figure>
+  </section>
+
+  <section id="detect">
+    <header><div class="eyebrow">Signal ingestion</div><h2>How problems are detected</h2>
+      <p class="muted">No single source sees everything. Five independent detectors feed the same pipeline. All of them are plain code with no LLM. The model only runs after something has been flagged, which keeps detection fast, cheap and predictable.</p></header>
+    <figure>
+      <div class="fig-scroll">
+        <svg viewBox="0 0 900 330" role="img" aria-label="Five deterministic detectors (Kubernetes API watch, metrics alerts, log tail, synthetic prober, periodic sweep) emit Signals into ingestion, which dedups them into incidents. The LLM is first used at triage, after the incident manager.">
+          <defs>
+            <marker id="d-a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah loop" d="M0,0 L10,5 L0,10 z"/></marker>
+            <marker id="d-l" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path class="ah llm" d="M0,0 L10,5 L0,10 z"/></marker>
+          </defs>
+          <rect class="zone" x="10" y="10" width="630" height="310" rx="10"/>
+          <text class="zone-label" x="26" y="32">DETERMINISTIC · NO LLM</text>
+          <rect class="box" x="30" y="46" width="300" height="44" rx="6"/>
+          <text class="t1" x="46" y="65">K8s API watch</text>
+          <text class="t2" x="46" y="81">pods · events · endpoints · nodes · PVCs · ArgoCD</text>
+          <rect class="box" x="30" y="100" width="300" height="44" rx="6"/>
+          <text class="t1" x="46" y="119">Metrics alerts</text>
+          <text class="t2" x="46" y="135">Prometheus rules → Alertmanager webhook</text>
+          <rect class="box" x="30" y="154" width="300" height="44" rx="6"/>
+          <text class="t1" x="46" y="173">Log tail</text>
+          <text class="t2" x="46" y="189">error patterns from Running, Ready pods</text>
+          <rect class="box" x="30" y="208" width="300" height="44" rx="6"/>
+          <text class="t1" x="46" y="227">Synthetic prober</text>
+          <text class="t2" x="46" y="243">user paths every 15s</text>
+          <rect class="box" x="30" y="262" width="300" height="44" rx="6"/>
+          <text class="t1" x="46" y="281">Periodic sweep</text>
+          <text class="t2" x="46" y="297">full scan every 5 min</text>
+
+          <path class="edge loop" d="M330 68 C380 68 380 152 438 152" marker-end="url(#d-a)"/>
+          <path class="edge loop" d="M330 122 C380 122 380 160 438 160" marker-end="url(#d-a)"/>
+          <path class="edge loop" d="M330 176 H438" marker-end="url(#d-a)"/>
+          <path class="edge loop" d="M330 230 C380 230 380 192 438 192" marker-end="url(#d-a)"/>
+          <path class="edge loop" d="M330 284 C380 284 380 200 438 200" marker-end="url(#d-a)"/>
+
+          <rect class="box agent" x="440" y="136" width="180" height="80" rx="6"/>
+          <text class="t1" x="530" y="164" text-anchor="middle">Signal ingestion</text>
+          <text class="t2" x="530" y="182" text-anchor="middle">fingerprint ns/workload/symptom</text>
+          <text class="t2" x="530" y="198" text-anchor="middle">dedup · debounce 30s</text>
+
+          <path class="edge loop" d="M620 176 H688" marker-end="url(#d-a)"/>
+          <text class="lbl loop" x="628" y="168">Signal</text>
+          <rect class="box agent" x="690" y="150" width="190" height="52" rx="6"/>
+          <text class="t1" x="785" y="172" text-anchor="middle">Incident manager</text>
+          <text class="t2" x="785" y="190" text-anchor="middle">one incident per fingerprint</text>
+          <path class="edge llm" d="M785 202 V258" marker-end="url(#d-l)"/>
+          <rect class="box llm" x="690" y="260" width="190" height="46" rx="6"/>
+          <text class="t1" x="785" y="281" text-anchor="middle">Triage</text>
+          <text class="t2" x="785" y="297" text-anchor="middle">first LLM call</text>
+        </svg>
+      </div>
+      <figcaption>Every detector emits the same <code>Signal {source, fingerprint, severity, evidence}</code>. When several detectors see the same problem (a crash loop plus a failing probe plus a 5xx alert), the shared fingerprint merges them into one incident with richer evidence.</figcaption>
+    </figure>
+    <div class="table-scroll"><table>
+      <thead><tr><th>Detector</th><th>What it sees</th><th>Examples</th><th>How</th></tr></thead>
+      <tbody>
+        <tr><td class="k">K8s API watch</td><td>Anything Kubernetes itself knows is wrong. No metrics needed.</td><td>CrashLoopBackOff, ImagePullBackOff, CreateContainerConfigError, OOMKilled, rising restarts, Pending &gt; 60s, Warning events (FailedScheduling, FailedMount, Unhealthy, Evicted), stalled rollouts, Services with 0 ready endpoints, node pressure, PVC Pending, failed Jobs, ArgoCD Degraded / SyncFailed</td><td><code>kubernetes</code> watch streams, resumed from the last <code>resourceVersion</code></td></tr>
+        <tr><td class="k">Metrics alerts</td><td>Problems that only show up as numbers over time</td><td>5xx rate, p95 latency, memory near limit (before OOM), CPU throttling, <b>PVC filling up</b>, certificate expiry</td><td>kube-prometheus-stack rules → Alertmanager → agent webhook</td></tr>
+        <tr><td class="k">Log tail</td><td>Errors from pods that look perfectly healthy</td><td>"connection refused", "timeout", stack traces, at a rate above the workload's baseline</td><td>Agent follows pod logs in watched namespaces. Stretch goal: Loki + LogQL rules</td></tr>
+        <tr><td class="k">Synthetic prober</td><td>Users are broken but every pod is green</td><td>Frontend <code>/</code>, <code>api /healthz</code> through the Service, api → redis path</td><td>Built into the agent, HTTP checks every 15s, 3 failures in a row = signal</td></tr>
+        <tr><td class="k">Periodic sweep</td><td>Whatever the watch missed</td><td>Events lost during a watch reconnect, faults that existed before the agent started, slow drift</td><td>Full list of watched resources every 5 min, same checks as the watch</td></tr>
+        <tr><td class="k">Heartbeat</td><td>The agent itself going silent</td><td>Agent crashed, lost API access or its LLM endpoint</td><td>Alertmanager Watchdog + agent heartbeat on the scoreboard and Telegram</td></tr>
+      </tbody>
+    </table></div>
+    <div class="rails">
+      <div class="rail"><h3>Some faults are invisible to Kubernetes</h3><p>A NetworkPolicy that blocks api → redis leaves every pod Running and Ready, with no restarts and no events. Only the prober (timeouts) and the log tail (connection errors) catch it. It's a good demo moment for why there are several detectors.</p></div>
+      <div class="rail"><h3>Disk usage is metrics-only</h3><p>A PVC object only says Bound and its size, never how full it is. Usage comes from kubelet volume stats (<code>kubelet_volume_stats_used_bytes</code>, inodes) and the built-in <code>KubePersistentVolumeFillingUp</code> alerts: a warning when the trend predicts full in 4 days, critical under 3% free.</p></div>
+      <div class="rail"><h3>Check the demo storage on day 1</h3><p>kind's default <code>local-path</code> provisioner probably reports no volume stats and can't expand volumes. Install <code>csi-driver-host-path</code> (reports stats, supports expansion) and confirm the metric appears before building the PVC scenario.</p></div>
+    </div>
   </section>
 
   <section id="states">
@@ -412,11 +484,11 @@ sequenceDiagram
   <section id="components">
     <header><div class="eyebrow">Build list</div><h2>Components</h2><p class="muted">Open a card for its inputs, outputs and tech.</p></header>
     <div class="comp-grid">
-      <details class="comp" open><summary><div class="row"><h3>Signal ingestion</h3><span class="tag">Platform</span></div><span class="one">Turns cluster noise into candidate incidents.</span></summary>
+      <details class="comp" open><summary><div class="row"><h3>Signal ingestion</h3><span class="tag">Platform</span></div><span class="one">Five detectors turn cluster noise into candidate incidents.</span></summary>
         <div class="body"><dl>
-          <dt>In</dt><dd>K8s watch on Events + Pods (CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending, probe failures, Service with no endpoints); Alertmanager webhook.</dd>
-          <dt>Out</dt><dd>Signal with fingerprint <code>ns/workload/symptom</code>.</dd>
-          <dt>Tech</dt><dd><code>kubernetes</code> Python client (watch), FastAPI webhook endpoint, 30s debounce.</dd>
+          <dt>In</dt><dd>Five detectors: K8s API watch, Alertmanager webhook, log tail, synthetic prober (15s), periodic sweep (5 min). See <a href="#detect">Detection</a>.</dd>
+          <dt>Out</dt><dd><code>Signal {source, fingerprint ns/workload/symptom, severity, evidence}</code>. Signals with the same fingerprint merge into one incident.</dd>
+          <dt>Tech</dt><dd><code>kubernetes</code> Python client (watch), FastAPI webhook endpoint, asyncio tasks for log tail, prober and sweep, 30s debounce.</dd>
         </dl></div></details>
       <details class="comp"><summary><div class="row"><h3>Incident manager</h3><span class="tag">Agent core</span></div><span class="one">Owns the state machine and the record.</span></summary>
         <div class="body"><dl>
@@ -472,7 +544,7 @@ sequenceDiagram
         </dl></div></details>
       <details class="comp"><summary><div class="row"><h3>Platform bootstrap</h3><span class="tag">Platform</span></div><span class="one">One command from laptop to working demo.</span></summary>
         <div class="body"><dl>
-          <dt>Make</dt><dd><code>make up</code>: kind cluster, ArgoCD, kube-prometheus-stack, Kyverno, demo app, agent RBAC.</dd>
+          <dt>Make</dt><dd><code>make up</code>: kind cluster, <code>csi-driver-host-path</code> StorageClass (volume stats + expansion), ArgoCD, kube-prometheus-stack, Kyverno, demo app, agent RBAC.</dd>
           <dt>Reset</dt><dd><code>make reset</code> between demo runs, under 2 min.</dd>
         </dl></div></details>
     </div>
@@ -503,7 +575,7 @@ sequenceDiagram
     <div class="rails">
       <div class="rail"><h3>Read-only identity</h3><p>The agent's ServiceAccount has a ClusterRole with get/list/watch only, and no access to Secret values.</p></div>
       <div class="rail"><h3>Writes only through git</h3><p>Every change is a reviewable PR, merged on human approval and easy to revert.</p></div>
-      <div class="rail"><h3>Fix allowlist</h3><p>Resources, image tag, env/ConfigMap refs, probes, selectors, replicas. Anything else is escalated.</p></div>
+      <div class="rail"><h3>Fix allowlist</h3><p>Resources, image tag, env/ConfigMap refs, probes, selectors, replicas, PVC size (at most 2×). Anything else is escalated.</p></div>
       <div class="rail"><h3>Validation gate</h3><p>Schema check, server-side dry-run and Kyverno policies all run before a human ever sees the PR.</p></div>
       <div class="rail"><h3>Scope and rate limits</h3><p>Namespace allowlist, at most 1 open PR per workload, 5 PRs per hour, 15 tool calls per investigation.</p></div>
       <div class="rail"><h3>Approver allowlist</h3><p>Only listed Telegram user IDs can approve or reject. The bot ignores everyone else in the chat.</p></div>
@@ -514,19 +586,20 @@ sequenceDiagram
   <section id="scenarios">
     <header><div class="eyebrow">Doubles as the test suite</div><h2>Fault catalog</h2></header>
     <div class="table-scroll"><table>
-      <thead><tr><th>Fault</th><th>Injected commit</th><th>Symptom</th><th>Expected diagnosis → fix</th><th>Difficulty</th></tr></thead>
+      <thead><tr><th>Fault</th><th>Injected commit</th><th>Symptom</th><th>Caught by</th><th>Expected diagnosis → fix</th><th>Difficulty</th></tr></thead>
       <tbody>
-        <tr><td class="k">OOM limit</td><td>memory 512Mi → 64Mi</td><td>OOMKilled, CrashLoop</td><td>Limit below peak usage → restore limit (from Prometheus peak + headroom)</td><td><span class="pill easy">easy</span></td></tr>
-        <tr><td class="k">Bad image tag</td><td><code>api:1.4.2</code> → <code>api:1.4.20</code></td><td>ImagePullBackOff</td><td>Tag doesn't exist → revert to last good tag</td><td><span class="pill easy">easy</span></td></tr>
-        <tr><td class="k">Missing config key</td><td>rename <code>REDIS_URL</code> in ConfigMap</td><td>CrashLoop, log "REDIS_URL not set"</td><td>Key renamed → restore key name</td><td><span class="pill med">medium</span></td></tr>
-        <tr><td class="k">Broken probe</td><td>liveness path <code>/healthz</code> → <code>/health</code></td><td>Restarts, probe 404 events</td><td>Probe path wrong → fix path</td><td><span class="pill med">medium</span></td></tr>
-        <tr><td class="k">Selector mismatch</td><td>Service selector <code>app: api</code> → <code>app: api-v2</code></td><td>No endpoints, frontend 502s</td><td>Selector matches no pods → fix selector</td><td><span class="pill med">medium</span></td></tr>
-        <tr><td class="k">NetworkPolicy block</td><td>add deny policy for redis ingress</td><td>api timeouts to redis</td><td>New policy blocks api→redis → allow rule</td><td><span class="pill hard">hard</span></td></tr>
-        <tr><td class="k">Unschedulable</td><td>cpu request 100m → 64</td><td>Pods Pending, FailedScheduling</td><td>Request exceeds node capacity → restore request</td><td><span class="pill med">medium</span></td></tr>
-        <tr><td class="k">App bug (no config change)</td><td>new image with a real code bug</td><td>500s, stack trace in logs</td><td>Code bug, not config → <b>escalate</b> with evidence and suggest rollback</td><td><span class="pill esc">escalate</span></td></tr>
+        <tr><td class="k">OOM limit</td><td>memory 512Mi → 64Mi</td><td>OOMKilled, CrashLoop</td><td>watch, metrics</td><td>Limit below peak usage → restore limit (from Prometheus peak + headroom)</td><td><span class="pill easy">easy</span></td></tr>
+        <tr><td class="k">Bad image tag</td><td><code>api:1.4.2</code> → <code>api:1.4.20</code></td><td>ImagePullBackOff</td><td>watch</td><td>Tag doesn't exist → revert to last good tag</td><td><span class="pill easy">easy</span></td></tr>
+        <tr><td class="k">Missing config key</td><td>rename <code>REDIS_URL</code> in ConfigMap</td><td>CrashLoop, log "REDIS_URL not set"</td><td>watch, logs</td><td>Key renamed → restore key name</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">Broken probe</td><td>liveness path <code>/healthz</code> → <code>/health</code></td><td>Restarts, probe 404 events</td><td>watch</td><td>Probe path wrong → fix path</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">Selector mismatch</td><td>Service selector <code>app: api</code> → <code>app: api-v2</code></td><td>No endpoints, frontend 502s</td><td>watch, prober</td><td>Selector matches no pods → fix selector</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">NetworkPolicy block</td><td>add deny policy for redis ingress</td><td>api timeouts to redis</td><td><b>prober, logs only</b></td><td>New policy blocks api→redis → allow rule</td><td><span class="pill hard">hard</span></td></tr>
+        <tr><td class="k">Unschedulable</td><td>cpu request 100m → 64</td><td>Pods Pending, FailedScheduling</td><td>watch</td><td>Request exceeds node capacity → restore request</td><td><span class="pill med">medium</span></td></tr>
+        <tr><td class="k">PVC filling up</td><td>enable a debug writer sidecar on redis</td><td>Volume usage climbing, then write errors</td><td>metrics (predictive alert)</td><td>Fills within hours → PR raising PVC size (≤2×); if it's runaway writes, escalate with the writer as evidence</td><td><span class="pill hard">hard</span></td></tr>
+        <tr><td class="k">App bug (no config change)</td><td>new image with a real code bug</td><td>500s, stack trace in logs</td><td>metrics, logs, prober</td><td>Code bug, not config → <b>escalate</b> with evidence and suggest rollback</td><td><span class="pill esc">escalate</span></td></tr>
       </tbody>
     </table></div>
-    <p class="muted">Each row becomes a test: <code>chaos inject X</code>, assert final state and fix class within a time budget. Run all eight before the demo.</p>
+    <p class="muted">Each row becomes a test: <code>chaos inject X</code>, assert final state and fix class within a time budget. Run all nine before the demo.</p>
   </section>
 
   <section id="decisions">
@@ -544,6 +617,9 @@ sequenceDiagram
         <tr><td class="k">Approval mode</td><td>always human · auto for low risk</td><td><span class="pill rec">always human</span></td><td>Safer story. Show an auto-approve flag for one fix class as a stretch goal.</td></tr>
         <tr><td class="k">Demo cluster</td><td>kind on laptop · cloud cluster</td><td><span class="pill rec">kind</span></td><td>Only Groq and Telegram need the internet. Record a backup video.</td></tr>
         <tr><td class="k">Logs</td><td><code>kubectl logs</code> · Loki</td><td><span class="pill rec">kubectl logs</span></td><td>Enough for every scenario. Add Loki only if time allows.</td></tr>
+        <tr><td class="k">Log detection</td><td>agent tails logs · Loki + LogQL rules</td><td><span class="pill rec">tail now</span></td><td>No extra stack to run. Loki is a stretch goal, and the better fit for the closed network at scale.</td></tr>
+        <tr><td class="k">Synthetic probes</td><td>built into the agent · blackbox-exporter</td><td><span class="pill rec">built-in</span></td><td>One less component, and probe failures arrive as Signals directly instead of through Prometheus.</td></tr>
+        <tr><td class="k">Demo storage</td><td><code>local-path</code> · <code>csi-driver-host-path</code></td><td><span class="pill rec">csi-driver-host-path</span></td><td>Needed for PVC usage metrics and volume expansion. Verify on day 1.</td></tr>
         <tr><td class="k">Runbook search</td><td>agent greps files · vector DB</td><td><span class="pill rec">grep</span></td><td>Tens of documents don't need embeddings, and there's one fewer moving part.</td></tr>
         <tr><td class="k">State store</td><td>SQLite · Redis · Postgres</td><td><span class="pill rec">SQLite</span></td><td>Single process, zero ops, and the scoreboard reads it directly.</td></tr>
         <tr><td class="k">Telegram transport</td><td>long polling · webhook</td><td><span class="pill rec">long polling</span></td><td>Works behind venue NAT without ngrok.</td></tr>
@@ -559,7 +635,7 @@ sequenceDiagram
     <header><div class="eyebrow">Two repos</div><h2>Repo layout</h2></header>
 <pre class="tree"><span class="c"># repo 1: the agent (monorepo)</span>
 agent/
-  ingest/          <span class="c"># watcher + alertmanager webhook</span>
+  ingest/          <span class="c"># k8s watch, alert webhook, log tail, prober, sweep</span>
   incidents/       <span class="c"># state machine, sqlite models</span>
   llm/             <span class="c"># OpenAI-compatible client, tool loop, prompts (Groq / Ollama via config)</span>
   tools/           <span class="c"># read-only k8s, prom, git, argocd, runbook tools</span>
@@ -589,7 +665,7 @@ runbooks/          <span class="c"># seeded runbooks + generated postmortems</sp
       <div class="ms"><span class="when">M1 · hour 4</span><h3>Cluster + GitOps</h3><p>A manual bad commit breaks the app and ArgoCD shows it.</p></div>
       <div class="ms"><span class="when">M2 · hour 10</span><h3>Diagnosis in Telegram</h3><p>The OOM fault produces a correct root cause card. No fix yet.</p></div>
       <div class="ms"><span class="when">M3 · hour 16</span><h3>Full loop</h3><p>PR → approve → sync → verified, plus the revert path on one fault.</p></div>
-      <div class="ms"><span class="when">M4 · hour 21</span><h3>Demo ready</h3><p>6+ of 8 faults green, barrage works, rehearsed twice, video recorded.</p></div>
+      <div class="ms"><span class="when">M4 · hour 21</span><h3>Demo ready</h3><p>7+ of 9 faults green, barrage works, rehearsed twice, video recorded.</p></div>
     </div>
   </section>
 

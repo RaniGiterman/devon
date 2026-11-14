@@ -16,7 +16,10 @@ flowchart LR
   end
 
   subgraph agent["Agent service (Python)"]
-    ingest["Signal ingestion"] --> inc["Incident manager<br/>SQLite"]
+    ingest["Signal ingestion<br/>dedup · debounce"] --> inc["Incident manager<br/>SQLite"]
+    prober["Synthetic prober<br/>every 15s"] --> ingest
+    sweep["Periodic sweep<br/>every 5 min"] --> ingest
+    logtail["Log tail"] --> ingest
     inc --> triage["Triage · gpt-oss-20b"]
     triage --> inv["Investigator · gpt-oss-120b"]
     inv --> fix["Fixer + validation gate"]
@@ -34,8 +37,11 @@ flowchart LR
   gh[("Git server · gitops-manifests<br/>GitHub now · Gitea on closed net")]
 
   app -- scrape --> prom
-  prom -- alerts --> ingest
-  api -- watch --> ingest
+  prom -- "alert webhook (5xx, latency, memory, PVC usage)" --> ingest
+  api -- "watch: pods, events, endpoints, nodes, PVCs" --> ingest
+  api -. "pod logs" .-> logtail
+  sweep -. "list all" .-> api
+  prober -. "HTTP checks" .-> app
   inv -. "read-only: kubectl, PromQL" .-> api
   inv -. search .-> rb
   triage -- "LLM calls" --> llm
@@ -50,6 +56,21 @@ flowchart LR
   gh -- "sync on merge" --> argo
   argo -- applies --> api
 ```
+
+## How problems are detected
+
+Five deterministic detectors (no LLM) emit the same `Signal {source, fingerprint, severity, evidence}`. Signals with the same `ns/workload/symptom` fingerprint merge into one incident. The LLM first runs at triage.
+
+| Detector | Sees | Examples |
+|---|---|---|
+| K8s API watch | What Kubernetes knows is wrong | CrashLoopBackOff, ImagePullBackOff, OOMKilled, Pending, Warning events, 0 ready endpoints, node pressure, ArgoCD Degraded |
+| Metrics alerts | Problems that are numbers over time | 5xx rate, latency, memory near limit, **PVC filling up**, cert expiry |
+| Log tail | Errors from pods that look healthy | "connection refused", stack traces |
+| Synthetic prober | Users broken, pods green | NetworkPolicy blocking api → redis |
+| Periodic sweep | Whatever the watch missed | Lost events, pre-existing faults, drift |
+| Heartbeat | The agent itself going silent | Watchdog alert + agent heartbeat |
+
+PVC usage is visible only through kubelet volume stats (metrics). kind's default `local-path` provisioner probably doesn't report them, so the demo uses `csi-driver-host-path`.
 
 ## Incident lifecycle
 

@@ -16,7 +16,7 @@ Design phase. No code yet.
 
 | File | What's in it |
 |---|---|
-| [design/architecture.html](design/architecture.html) | Full design doc: demo story, architecture diagram, components, closed-network path, guardrails, fault catalog, decisions, work split, risks. Open it in a browser. |
+| [design/architecture.html](design/architecture.html) | Full design doc: demo story, architecture diagram, detection layers, components, closed-network path, guardrails, fault catalog, decisions, work split, risks. Open it in a browser. |
 | [design/diagrams.md](design/diagrams.md) | Architecture, incident lifecycle and sequence diagrams, in Mermaid (renders on GitHub). |
 | [design/plan.md](design/plan.md) | The original planning outline (stack choices since changed; see below). |
 
@@ -24,6 +24,7 @@ Design phase. No code yet.
 
 - **The agent cannot write to the cluster.** It has read-only RBAC. Every fix goes through a GitOps PR that a human approves.
 - **"What changed?" is the core of the diagnosis.** Faults are injected as git commits, so the agent links each failure to the commit that caused it.
+- **Detection is layered and needs no LLM.** Five detectors: a Kubernetes API watch, metrics alerts, a log tail, a synthetic prober and a periodic sweep. Together they catch problems no single source sees (a blocked NetworkPolicy leaves every pod green; a filling PVC is visible only in metrics). The LLM runs only after a signal.
 - **The agent proves its fixes work.** It watches the rollout after each fix and reverts the fix if the symptom persists.
 - **One codebase, internet or air-gapped.** The LLM, the chat channel and the git server each sit behind a small interface. Moving to the closed network is a configuration change.
 
