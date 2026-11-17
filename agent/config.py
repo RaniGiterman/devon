@@ -16,9 +16,10 @@ class Settings(BaseSettings):
     # LLM: any OpenAI-compatible endpoint (Groq now, Ollama on the closed network).
     llm_base_url: str = "https://api.groq.com/openai/v1"
     llm_api_key: str = ""
-    model_fast: str = "openai/gpt-oss-20b"
-    model_smart: str = "openai/gpt-oss-120b"
-    llm_reasoning_effort: str = ""  # low | medium | high; empty = don't send
+    # Free-tier limits are per model, so triage and investigation use different models.
+    model_fast: str = "qwen/qwen3.8-27b"     # triage, explanations, postmortems
+    model_smart: str = "openai/gpt-oss-20b"  # investigation and fixes
+    llm_reasoning_effort: str = "low"  # gpt-oss only; low keeps hidden reasoning tokens (and rate-limit use) down
     llm_max_concurrency: int = 1  # free-tier rate limits are per minute; parallel calls just collide
 
     # Cluster access. Two identities, see infra/rbac/agent.yaml.
@@ -55,7 +56,7 @@ class Settings(BaseSettings):
     log_poll_s: int = 15
     log_errors_to_signal: int = 3
     sweep_interval_s: int = 300
-    max_tool_calls: int = 15
+    max_tool_calls: int = 10
     max_prs_per_hour: int = 5
     max_fix_attempts: int = 2
     min_confidence: float = 0.7

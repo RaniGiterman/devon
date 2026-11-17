@@ -189,3 +189,25 @@ async def test_downstream_of_escalated_incident_stays_quiet(make):
 async def test_approve_when_not_waiting_is_refused(make):
     m, store, *_ = make()
     assert "not awaiting" in await m.approve(99, "x")
+
+
+async def test_restart_does_not_mute_new_problems(make):
+    """Regression: incidents interrupted by a restart were marked ESCALATED, and the escalation
+    mute then swallowed the next fault on that workload."""
+    m, store, *_ = make()
+    iid = store.create("demo/api", "demo", "api", "critical", "old")
+    m.recover_after_restart()
+    assert store.get(iid)["state"] == "DROPPED"
+    await m.on_signal(sig("api"))
+    assert len(store.list()) == 2
+
+
+async def test_new_symptom_on_escalated_workload_opens_new_incident(make):
+    m, store, *_ = make(llm=FakeLLM(diag={**DIAG, "fix_class": "none", "escalate_reason": "code bug"}))
+    await m.on_signal(Signal("logs", "demo", "api", "LogErrors", "api: errors", "warning", ["KeyError"], stateful=False))
+    await wait_state(store, 1, {"ESCALATED"})
+    m._seen.clear()
+    await m.on_signal(Signal("logs", "demo", "api", "LogErrors", "api: errors", "warning", ["KeyError"], stateful=False))
+    assert len(store.list()) == 1          # same ongoing problem stays with the escalation
+    await m.on_signal(sig("api"))          # OOMKilled: a different fault
+    assert len(store.list()) == 2

@@ -58,7 +58,7 @@ class IncidentManager:
             inc = self.store.open_for_key(sig.key)
             if inc is None:
                 last = self.store.last_closed_for_key(sig.key)
-                if last and last["state"] == "ESCALATED" and self._still_noisy(last["id"]):
+                if last and last["state"] == "ESCALATED" and self._still_noisy(last["id"], sig.symptom):
                     self._attach(last["id"], sig)  # same ongoing problem; a human owns it now
                     return
                 if self._open_parent(last):
@@ -75,8 +75,12 @@ class IncidentManager:
                 if SEVERITY_ORDER.get(sig.severity, 0) > SEVERITY_ORDER.get(inc["severity"] or "", 0):
                     self.store.update(inc["id"], severity=sig.severity)
 
-    def _still_noisy(self, iid: int) -> bool:
+    def _still_noisy(self, iid: int, symptom: str | None = None) -> bool:
+        """True while the escalated problem keeps signalling. With `symptom`, only if that symptom is
+        part of the escalated problem: a different symptom is a new fault and gets its own incident."""
         sigs = self.store.signals(iid, since=time.time() - ESCALATED_QUIET_S)
+        if symptom is not None:
+            return any(s["symptom"] == symptom for s in sigs)
         return bool(sigs)
 
     def _parent_active(self, parent: dict | None) -> bool:
@@ -105,7 +109,9 @@ class IncidentManager:
 
     def recover_after_restart(self) -> None:
         for inc in self.store.open_incidents():
-            self.store.transition(inc["id"], "ESCALATED", "agent restarted while this incident was in progress")
+            # Closed as DROPPED, not ESCALATED: an escalation mutes later signals for the
+            # workload, and a restart must not hide problems that are still happening.
+            self.store.transition(inc["id"], "DROPPED", "agent restarted; re-detected if still failing")
 
     # ------------------------------------------------------------- approvals
     async def approve(self, iid: int, who: str) -> str:

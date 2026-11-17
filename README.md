@@ -71,10 +71,12 @@ make scenarios              # every catalog fault end to end (needs `make up` + 
 | | Hackathon | Closed network |
 |---|---|---|
 | Endpoint | Groq · `https://api.groq.com/openai/v1` | Ollama · `http://ollama:11434/v1` |
-| Investigation + fixes | `openai/gpt-oss-120b` | `gpt-oss:120b` (~80 GB GPU) |
-| Triage | `openai/gpt-oss-20b` | `gpt-oss:20b` (~16 GB GPU) |
+| Investigation + fixes | `openai/gpt-oss-20b` | `gpt-oss:20b` (~16 GB GPU) |
+| Triage, explanations, postmortems | `qwen/qwen3.8-27b` | `gpt-oss:20b` (same model is fine locally) |
 
 Switch by changing `LLM_BASE_URL`, `LLM_API_KEY` and the model names in `.env`.
+
+**Groq free tier:** limits are per model (8K tokens/minute and 1,000 requests/day each on our key), so triage and investigation use different models to get separate budgets. `LLM_REASONING_EFFORT=low` (sent to gpt-oss only) and trimming older tool output keep a whole incident around 10K tokens. Check `x-ratelimit-*` response headers or the Groq console for your org's current limits. A bigger model (`openai/gpt-oss-120b`) works too, but uses the same per-minute budget faster.
 
 ## Closed-network swaps
 
