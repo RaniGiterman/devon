@@ -47,7 +47,7 @@ def create_app(manager, store, health, settings, notifier_name: str) -> FastAPI:
             "duration": (inc["resolved"] or time.time()) - inc["created"], "pr_url": inc["pr_url"],
             "root_cause": d.get("root_cause"), "fix_title": (inc.get("fix") or {}).get("title"),
             "detectors": sorted({s["source"] for s in store.signals(inc["id"])}),
-            "tokens": inc["tokens"], "approver": inc["approver"],
+            "tokens": inc["tokens"], "llm_calls": inc.get("llm_calls") or 0, "approver": inc["approver"],
             "transitions": [{"to": t["to_state"], "ts": t["ts"], "note": t["note"]} for t in tr],
         }
 

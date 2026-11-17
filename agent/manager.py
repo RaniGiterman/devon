@@ -10,6 +10,7 @@ import time
 from datetime import datetime, timezone
 
 from agent.config import Settings
+from agent.evidence import collect as collect_evidence
 from agent.gate.validate import Gate
 from agent.githost.github import GitHost
 from agent.gitrepo import GitRepo
@@ -161,7 +162,7 @@ class IncidentManager:
             log.exception("incident #%d crashed", iid)
             await self._to(iid, "ESCALATED", f"agent error: {type(e).__name__}: {e}")
         finally:
-            self.store.add_usage(iid, usage.tokens, usage.ms)
+            self.store.add_usage(iid, usage.tokens, usage.ms, usage.calls)
             self.decisions.pop(iid, None)
             self.tasks.pop(iid, None)
 
@@ -169,27 +170,33 @@ class IncidentManager:
         await asyncio.sleep(self.s.debounce_s)
         inc = self.store.get(iid)
 
-        # Re-check: is it still happening?
+        # Triage is deterministic: is it still happening after the debounce? (No LLM call.)
         if not await self._still_happening(inc):
             await self._to(iid, "DROPPED", "recovered by itself before triage", notify=False)
             return
-
-        # Triage (fast model)
-        triage = await self.llm.json(prompts.TRIAGE, await self._triage_input(inc), usage=usage)
-        self.store.update(iid, triage=triage, severity=triage.get("severity") or inc["severity"])
-        await self._to(iid, "TRIAGED", triage.get("reason", ""), notify=False)
-        dup = triage.get("duplicate_of")
-        if dup and str(dup).isdigit() and self._parent_active(self.store.get(int(dup))):
-            await self._to(iid, "DROPPED", f"downstream symptom of incident #{dup}")
-            return
-        if not triage.get("actionable", True):
-            await self._to(iid, "DROPPED", f"not actionable: {triage.get('reason', '')}", notify=False)
-            return
+        await self._to(iid, "TRIAGED", f"still failing after {self.s.debounce_s}s", notify=False)
+        # "ArgoCD app Degraded" just echoes a broken workload in that app; if one is already being
+        # handled in the same namespace, don't spend a model call on the echo.
+        if inc["workload"].startswith("argocd/"):
+            root = next((o for o in self.store.open_incidents()
+                         if o["id"] != iid and o["namespace"] == inc["namespace"] and not o["workload"].startswith("argocd/")), None)
+            if root:
+                await self._to(iid, "DROPPED", f"app-level symptom of incident #{root['id']}", notify=False)
+                self.store.update(iid, triage={"duplicate_of": root["id"]})
+                return
 
         feedback = ""
         for attempt in range(1, self.s.max_fix_attempts + 1):
             self.store.update(iid, attempts=attempt)
-            diagnosis = await self._investigate(iid, feedback, usage)
+            # One model call: triage verdict + diagnosis + first fix proposal.
+            diagnosis, old_files = await self._investigate(iid, feedback, usage)
+            dup = diagnosis.get("duplicate_of")
+            if dup and str(dup).isdigit() and int(dup) != iid and self._parent_active(self.store.get(int(dup))):
+                await self._to(iid, "DROPPED", f"downstream symptom of incident #{dup}")
+                return
+            if diagnosis.get("actionable") is False:
+                await self._to(iid, "DROPPED", f"not actionable: {diagnosis.get('root_cause', '')}", notify=False)
+                return
             if (diagnosis.get("fix_class") in (None, "none") or diagnosis.get("escalate_reason")
                     or float(diagnosis.get("confidence") or 0) < self.s.min_confidence):
                 reason = diagnosis.get("escalate_reason") or (
@@ -199,7 +206,7 @@ class IncidentManager:
             if self.store.prs_since(time.time() - 3600) >= self.s.max_prs_per_hour:
                 raise Escalate(f"PR rate limit reached ({self.s.max_prs_per_hour}/hour). Diagnosis: {diagnosis.get('root_cause')}")
 
-            fix, gate = await self._propose_fix(iid, diagnosis, usage)
+            fix, gate = await self._propose_fix(iid, diagnosis, old_files, usage)
             if fix is None:
                 feedback = f"Previous fix attempt failed validation: {json.dumps(gate.get('checks'))[:1500]}"
                 continue
@@ -246,69 +253,43 @@ class IncidentManager:
             lines.append(f"- [{s['source']}] {s['symptom']}: {s['summary']} | {' / '.join(s['evidence'][:2])}")
         return "\n".join(lines[-limit:])
 
-    async def _triage_input(self, inc: dict) -> str:
-        pods = []
-        if inc["namespace"]:
-            for p in await asyncio.to_thread(self.kube.pods, inc["namespace"]):
-                from agent.detect import workload_of_pod
-                if workload_of_pod(p) != inc["workload"]:
-                    continue
-                st = p.get("status") or {}
-                cs = [f"{c['name']} ready={c.get('ready')} restarts={c.get('restartCount')} state={list((c.get('state') or {}).keys())}"
-                      for c in st.get("containerStatuses") or []]
-                pods.append(f"pod {p['metadata']['name']} phase={st.get('phase')} {'; '.join(cs)}")
-        others = [f"#{o['id']} {o['workload']} [{o['state']}]: {o['title']}" for o in self.store.open_incidents() if o["id"] != inc["id"]]
-        return (f"Incident #{inc['id']} on {inc['key']} opened {utc(inc['created'])}\n\nSignals:\n{self._signal_digest(inc['id'])}\n\n"
-                f"Current pods of this workload:\n" + ("\n".join(pods) or "(none)") +
-                "\n\nOther open incidents:\n" + ("\n".join(others) or "(none)"))
-
-    async def _investigate(self, iid: int, feedback: str, usage: Usage) -> dict:
+    async def _investigate(self, iid: int, feedback: str, usage: Usage) -> tuple[dict, dict[str, str]]:
+        """Collect the evidence pack (no LLM), then one model call for triage + diagnosis + fix."""
         inc = await self._to(iid, "INVESTIGATING", "", notify=False)
-        await self.notifier.update(inc, "investigating…")
+        await self.notifier.update(inc, "collecting evidence and investigating…")
 
         async def on_step(name: str, args: str, result: str) -> None:
             self.store.add_step(iid, "tool", name, f"{args}\n---\n{result[:1500]}")
 
-        user = (f"Incident #{iid}: workload '{inc['workload']}' in namespace '{inc['namespace']}', first detected "
-                f"{utc(inc['created'])}. Current time {utc(time.time())}.\nTriage: {json.dumps(inc.get('triage'))}\n\n"
-                f"Signals from detectors:\n{self._signal_digest(iid)}\n")
+        await self.repo.sync()
+        others = [o for o in self.store.open_incidents() if o["id"] != iid]
+        pack, old_files = await collect_evidence(inc, self.tools, self.kube, self.repo, self.s.gitops_apps_path,
+                                                 self._signal_digest(iid), others, on_step)
         if feedback:
-            user += f"\nIMPORTANT, from the previous attempt: {feedback}\n"
-        await self.repo.sync()
-        diagnosis = await self.llm.run_tools(prompts.INVESTIGATOR, user, self.tools, self.s.max_tool_calls, usage, on_step)
-        self.store.update(iid, diagnosis=diagnosis)
-        self.store.add_step(iid, "diagnosis", "investigator", json.dumps(diagnosis))
-        return diagnosis
+            pack += f"\n\n## IMPORTANT, from the previous attempt\n{feedback}"
+        self.store.add_step(iid, "evidence", "pack", f"{len(pack)} chars, {len(old_files)} manifest files")
+        result = await self.llm.run_tools(prompts.INVESTIGATE_AND_FIX, pack, self.tools, self.s.max_tool_calls, usage, on_step)
+        triage = {k: result.get(k) for k in ("actionable", "duplicate_of", "severity")}
+        diagnosis = {k: v for k, v in result.items() if k != "fix"}
+        diagnosis["proposed_fix"] = result.get("fix") or {}
+        self.store.update(iid, triage=triage, severity=result.get("severity") or inc["severity"],
+                          diagnosis={k: v for k, v in diagnosis.items() if k != "proposed_fix"})
+        self.store.add_step(iid, "diagnosis", "investigate+fix", json.dumps(result)[:4000])
+        return diagnosis, old_files
 
-    def _candidate_files(self, workload: str) -> list[str]:
-        apps = self.s.gitops_apps_path
-        name = workload.split("/")[-1]
-        files = []
-        for rel in self.repo.list_files(apps):
-            if rel.endswith((".yaml", ".yml", ".env")):
-                text = self.repo.read(rel)
-                if rel.startswith(f"{apps}/network/") or name in text or f"/{name}/" in rel:
-                    files.append(rel)
-        return files[:14]
-
-    async def _propose_fix(self, iid: int, diagnosis: dict, usage: Usage) -> tuple[dict | None, dict]:
+    async def _propose_fix(self, iid: int, diagnosis: dict, old_files: dict[str, str],
+                           usage: Usage) -> tuple[dict | None, dict]:
+        """Validate the fix from the combined call; only on a gate failure ask FIXER to correct it."""
         inc = self.store.get(iid)
-        await self.repo.sync()
-        cands = self._candidate_files(inc["workload"])
-        old_files = {p: self.repo.read(p) for p in cands}
-        suspect = ""
-        if diagnosis.get("suspect_commit"):
-            try:
-                suspect = (await self.repo.show(str(diagnosis["suspect_commit"])))[:3000]
-            except Exception:
-                pass
         feedback, gate_res = "", {}
         for attempt in range(self.s.max_fix_attempts):
-            user = (f"Diagnosis:\n{json.dumps(diagnosis, indent=1)}\n\n" +
-                    (f"Suspect commit:\n{suspect}\n\n" if suspect else "") +
-                    "Current files:\n" + "\n".join(f"=== {p} ===\n{c}" for p, c in old_files.items()) +
-                    (f"\n\nYour previous proposal failed validation:\n{feedback}\nFix that." if feedback else ""))
-            fix = await self.llm.json(prompts.FIXER, user, smart=True, usage=usage)
+            fix = diagnosis.get("proposed_fix") if attempt == 0 else None
+            if not fix or not fix.get("files"):
+                user = (f"Diagnosis:\n{json.dumps({k: v for k, v in diagnosis.items() if k != 'proposed_fix'}, indent=1)}\n\n"
+                        "Current files:\n" + "\n".join(f"=== {p} ===\n{c}" for p, c in old_files.items()) +
+                        (f"\n\nYour previous proposal failed validation:\n{feedback}\nFix that." if feedback else ""))
+                fix = await self.llm.json(prompts.FIXER, user, smart=True, usage=usage)
+            fix = dict(fix)
             new_files = {}
             for f in fix.get("files") or []:
                 p, c = f.get("path", ""), f.get("content", "")
@@ -365,20 +346,37 @@ class IncidentManager:
             note = f"automatic revert FAILED ({e}); revert {sha[:8]} manually"
         raise Escalate(f"{note}. {detail}")
 
+    def postmortem_markdown(self, iid: int) -> str:
+        """Built from the incident record; no model call needed."""
+        inc = self.store.get(iid)
+        d, fix = inc.get("diagnosis") or {}, inc.get("fix") or {}
+        tr = self.store.transitions(iid)
+        timeline = "\n".join(f"- {utc(t['ts'])}  **{t['to_state']}**" + (f": {t['note']}" if t["note"] else "") for t in tr)
+        sigs = self.store.signals(iid)
+        detectors = ", ".join(sorted({s["source"] for s in sigs})) or "n/a"
+        first = "; ".join(dict.fromkeys(s["summary"] for s in sigs[:3])) or inc["title"]
+        evidence = "\n".join(f"- {e}" for e in d.get("evidence") or []) or "- n/a"
+        took = int((inc["resolved"] or time.time()) - inc["created"])
+        return (f"# Postmortem: incident #{iid} ({inc['workload']})\n\n"
+                f"## Summary\n{inc['workload']} in `{inc['namespace']}` was unhealthy for {took}s. "
+                f"{d.get('root_cause', '')}\n\n"
+                f"## Timeline (UTC)\n{timeline}\n\n"
+                f"## Root cause\n{d.get('root_cause', 'n/a')}\n\n"
+                f"Caused by commit `{d.get('suspect_commit') or 'n/a'}`: {d.get('suspect_change') or 'n/a'}\n\n"
+                f"Evidence:\n{evidence}\n\n"
+                f"## Fix\n{fix.get('title', 'n/a')} ({inc.get('pr_url') or 'no PR'}), approved by {inc.get('approver') or 'n/a'}, "
+                f"merged as `{(inc.get('merge_sha') or '')[:8]}`. {fix.get('summary', '')}\n\n"
+                f"## Detection\nDetectors: {detectors}. First signals: {first}\n\n"
+                f"## Prevention\n- Review changes of class `{d.get('fix_class', 'n/a')}` carefully; this one passed review and broke {inc['workload']}.\n"
+                f"- Consider a policy or CI check that would have caught it before merge.\n")
+
     async def _postmortem(self, iid: int) -> None:
         inc = self.store.get(iid)
-        data = {
-            "incident": {k: inc.get(k) for k in ("id", "workload", "namespace", "severity", "approver", "pr_url", "merge_sha")},
-            "diagnosis": inc.get("diagnosis"), "fix": inc.get("fix"),
-            "transitions": [{"to": t["to_state"], "at": utc(t["ts"]), "note": t["note"]} for t in self.store.transitions(iid)],
-            "detectors": sorted({s["source"] for s in self.store.signals(iid)}),
-        }
         try:
-            md = await self.llm.text(prompts.POSTMORTEM, json.dumps(data, indent=1, default=str)[:12000])
-            title = f"# Postmortem: incident #{iid} ({inc['workload']})\n\n"
+            md = self.postmortem_markdown(iid)
             day = datetime.fromtimestamp(inc["created"], timezone.utc).strftime("%Y-%m-%d")
             path = f"runbooks/postmortems/{day}-incident-{iid}-{inc['workload'].replace('/', '-')}.md"
-            await self.repo.commit_main({path: title + md + "\n"}, f"postmortem: incident #{iid} ({inc['workload']})")
+            await self.repo.commit_main({path: md}, f"postmortem: incident #{iid} ({inc['workload']})")
             self.store.add_step(iid, "postmortem", path, md[:2000])
         except Exception as e:
             log.warning("postmortem for #%d failed: %s", iid, e)

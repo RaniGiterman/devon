@@ -19,6 +19,19 @@ from agent.store import Store
 log = logging.getLogger("devon.verify")
 
 
+def relevant_problems(signals, live_pods: set[str], settled: float) -> list[str]:
+    """Problems that count against a fix: not from before the rollout settled, and not events about
+    pods that are gone or terminating (an old pod failing its probes while it shuts down is normal)."""
+    out = []
+    for s in signals:
+        if s.ts < settled:
+            continue
+        if s.obj.startswith("Pod/") and s.obj.split("/", 1)[1] not in live_pods:
+            continue
+        out.append(s.summary)
+    return out
+
+
 class Verifier:
     def __init__(self, kube: Kube, store: Store, namespaces: list[str], argocd_ns: str, argocd_app: str,
                  alertmanager_url: str, poll_s: int = 10):
@@ -46,6 +59,11 @@ class Verifier:
                 last = f"argocd read failed: {e.reason}"
             await asyncio.sleep(5)
         return False, f"ArgoCD did not sync {sha[:8]} within {timeout}s ({last})"
+
+    def _live_pods(self, ns: str, workload: str) -> set[str]:
+        from agent.detect import workload_of_pod
+        return {p["metadata"]["name"] for p in self.kube.pods(ns)
+                if workload_of_pod(p) == workload and not p["metadata"].get("deletionTimestamp")}
 
     def _rollout_done(self, ns: str, workload: str) -> bool | None:
         try:
@@ -94,9 +112,9 @@ class Verifier:
         bad_streak, last_problem = 0, ""
         end = time.time() + window
         while time.time() < end:
-            # Ignore events from before the rollout settled (e.g. readiness failures while the new pod started).
-            problems = [s.summary for s in await asyncio.to_thread(scan, self.kube, [ns], self.argocd_ns, self.argocd_app, wl)
-                        if s.ts >= settled]
+            current = await asyncio.to_thread(scan, self.kube, [ns], self.argocd_ns, self.argocd_app, wl)
+            live = await asyncio.to_thread(self._live_pods, ns, wl)
+            problems = relevant_problems(current, live, settled)
             problems += [f"{s['source']}: {s['summary']}" for s in self.store.signals(iid, since=settled) if s["source"] in ("probe", "logs")]
             problems += [f"alert: {a}" for a in await self._alerts_since(ns, wl, settled)]
             if problems:

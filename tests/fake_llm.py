@@ -75,7 +75,7 @@ def investigate(messages: list[dict]) -> dict:
 
 
 def fix(user: str) -> dict:
-    files = dict(re.findall(r"=== (\S+) ===\n(.*?)(?=\n=== \S+ ===\n|\n\nYour previous|\Z)", user, re.S))
+    files = dict(re.findall(r"=== (\S+) ===\n(.*?)(?=\n=== \S+ ===\n|\n\nYour previous|\n\n## |\Z)", user, re.S))
     out, title = [], "revert faulty change"
     for path, content in files.items():
         new = content
@@ -90,11 +90,28 @@ def fix(user: str) -> dict:
             "files": out, "notes": ""}
 
 
+def investigate_and_fix(pack: str) -> dict:
+    """One-call mode: everything needed is in the evidence pack."""
+    wl = (re.search(r"workload '([\w/-]+)'", pack) or [None, ""])[1]
+    others = pack.split("## Other open incidents", 1)[-1].split("\n## ", 1)[0]
+    dup = None
+    if wl == "frontend":
+        m = re.search(r"#(\d+) (api|redis) ", others)
+        dup = int(m.group(1)) if m else None
+    git = pack.split("## Recent commits", 1)[-1].split("\n## ", 1)[0]
+    d = investigate([{"role": "tool", "content": git}])
+    d.update(actionable=True, duplicate_of=dup, severity="critical")
+    d["fix"] = fix(pack) if d.get("fix_class") not in (None, "none") else {"title": "", "summary": "", "risk": "low", "files": []}
+    return d
+
+
 @app.post("/v1/chat/completions")
 async def completions(req: Request):
     body = await req.json()
     msgs = body["messages"]
     system, user = msgs[0]["content"], next((m["content"] for m in msgs if m["role"] == "user"), "")
+    if system.startswith("You are an expert Kubernetes SRE handling an incident"):
+        return _reply(json.dumps(investigate_and_fix(user)))
     if system.startswith("You are the triage step"):
         return _reply(json.dumps(triage(user)))
     if system.startswith("You are an expert Kubernetes SRE"):

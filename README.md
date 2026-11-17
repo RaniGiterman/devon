@@ -52,11 +52,26 @@ make scenarios              # every catalog fault end to end (needs `make up` + 
 |---|---|---|
 | Detectors | `agent/ingest/detectors.py`, `agent/detect.py` | K8s API watch, Alertmanager webhook, log tail, synthetic prober (via the API server's service proxy), 5-minute sweep. Deterministic; no LLM. |
 | Incident manager | `agent/manager.py`, `agent/store.py` | State machine in SQLite. One incident per workload; signals merge into it. |
-| LLM | `agent/llm/` | One OpenAI-compatible client and a small tool loop. Triage on the fast model, investigation and fixes on the smart one. |
+| Evidence pack | `agent/evidence.py` | Gathers what an investigation almost always needs (pods, events, logs, recent commits + diffs, ArgoCD, metrics, runbook, manifests) without the model. |
+| LLM | `agent/llm/` | One OpenAI-compatible client. A single call reads the evidence pack and returns triage + diagnosis + fix; tools are there for rare follow-ups. |
 | Read-only tools | `agent/tools/readonly.py` | `k8s_get`, `k8s_events`, `k8s_logs`, `prom_query`, `git_log`, `git_show`, `read_manifest`, `argocd_status`, `runbook_search`. |
 | Validation gate | `agent/gate/` | Field-level fix allowlist, kustomize render, kubeconform, server-side dry run, policies, blast radius. |
 | Approvals | `agent/notify/` | Telegram bot (inline buttons, approver allowlist) or the scoreboard's web page. |
 | Verifier | `agent/verify.py` | Waits for ArgoCD to sync the fix, then watches the workload; reverts the fix if the symptom persists. |
+
+### Model calls per incident
+
+| Step | Model calls |
+|---|---|
+| Triage (still failing after the debounce? echo of another incident?) | 0, deterministic |
+| Evidence collection | 0, the agent runs the read-only tools itself |
+| Diagnosis + fix | **1** (plus 1 per follow-up tool the model asks for, at most 3) |
+| Fix fails the validation gate | +1 (FIXER corrects it) |
+| Rejected in Telegram | +1 (re-run with the reason) |
+| Postmortem | 0, built from the incident record |
+| Explain button | 1 per press |
+
+A typical incident is **one call of about 4–5K tokens**; the scoreboard API reports `llm_calls` and `tokens` per incident.
 | Chaos | `chaos/cli.py` | Faults as ordinary-looking commits, so "what changed?" is real. |
 
 ### Safety

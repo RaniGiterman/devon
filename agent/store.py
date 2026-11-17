@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS incidents (
   triage TEXT, diagnosis TEXT, fix TEXT, gate TEXT,
   pr_url TEXT, pr_number INTEGER, merge_sha TEXT,
   approver TEXT, reject_reason TEXT, outcome TEXT,
-  attempts INTEGER DEFAULT 0, tokens INTEGER DEFAULT 0, llm_ms INTEGER DEFAULT 0
+  attempts INTEGER DEFAULT 0, tokens INTEGER DEFAULT 0, llm_ms INTEGER DEFAULT 0, llm_calls INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS transitions (
   incident_id INTEGER, from_state TEXT, to_state TEXT, ts REAL, note TEXT);
@@ -47,6 +47,10 @@ class Store:
         self._lock = threading.Lock()
         with self._lock:
             self._db.executescript(SCHEMA)
+            try:  # databases created before llm_calls existed
+                self._db.execute("ALTER TABLE incidents ADD COLUMN llm_calls INTEGER DEFAULT 0")
+            except sqlite3.OperationalError:
+                pass
 
     def _x(self, sql: str, args=()):
         with self._lock:
@@ -92,8 +96,9 @@ class Store:
         vals = [json.dumps(v) if k in JSON_COLS and v is not None else v for k, v in fields.items()]
         self._x(f"UPDATE incidents SET {cols} WHERE id=?", (*vals, iid))
 
-    def add_usage(self, iid: int, tokens: int, ms: int) -> None:
-        self._x("UPDATE incidents SET tokens=tokens+?, llm_ms=llm_ms+? WHERE id=?", (tokens, ms, iid))
+    def add_usage(self, iid: int, tokens: int, ms: int, calls: int = 0) -> None:
+        self._x("UPDATE incidents SET tokens=tokens+?, llm_ms=llm_ms+?, llm_calls=llm_calls+? WHERE id=?",
+                (tokens, ms, calls, iid))
 
     def transition(self, iid: int, to_state: str, note: str = "") -> str:
         assert to_state in STATES, to_state

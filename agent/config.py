@@ -56,7 +56,7 @@ class Settings(BaseSettings):
     log_poll_s: int = 15
     log_errors_to_signal: int = 3
     sweep_interval_s: int = 300
-    max_tool_calls: int = 10
+    max_tool_calls: int = 3  # follow-ups only; the evidence pack covers the usual fetches
     max_prs_per_hour: int = 5
     max_fix_attempts: int = 2
     min_confidence: float = 0.7

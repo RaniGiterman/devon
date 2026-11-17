@@ -15,20 +15,25 @@ DIAG = {"root_cause": "limit too low", "evidence": ["OOMKilled"], "suspect_commi
         "confidence": 0.9, "fix_class": "resources", "fix_hint": "restore", "escalate_reason": None}
 
 
+FIX = {"title": "api: restore limit", "summary": "s", "risk": "low",
+       "files": [{"path": "apps/api/deployment.yaml", "content": "new\n"}]}
+
+
 class FakeLLM:
+    """One combined call (run_tools) returns triage + diagnosis + fix; json() is only the FIXER retry."""
+
     def __init__(self, diag=DIAG, triage=None):
-        self.diag, self.triage = diag, triage or {"actionable": True, "severity": "critical", "duplicate_of": None, "reason": "down"}
-        self.feedback = []
+        self.diag, self.triage = diag, triage or {"actionable": True, "severity": "critical", "duplicate_of": None}
+        self.feedback, self.fixer_calls = [], 0
 
     async def json(self, system, user, smart=False, usage=None):
-        if "triage" in system:
-            return self.triage
-        return {"title": "api: restore limit", "summary": "s", "risk": "low",
-                "files": [{"path": "apps/api/deployment.yaml", "content": "new\n"}]}
+        self.fixer_calls += 1
+        return dict(FIX)
 
     async def run_tools(self, system, user, tools, max_calls=15, usage=None, on_step=None):
         self.feedback.append(user)
-        return dict(self.diag)
+        fix = FIX if self.diag.get("fix_class") not in (None, "none") else {"files": []}
+        return {**self.diag, **self.triage, "fix": fix}
 
     async def text(self, *a, **k):
         return "text"
@@ -77,6 +82,11 @@ class FakeVerifier:
 def make(monkeypatch):
     # The pre-triage recheck scans the cluster; pretend the problem is still there.
     monkeypatch.setattr("agent.manager.scan", lambda *a, **k: [Signal("sweep", "demo", "api", "OOMKilled", "x")])
+
+    async def fake_collect(inc, tools, kube, repo, apps, digest, others, on_step=None):
+        other = "\n".join(f"#{o['id']} {o['workload']}" for o in others)
+        return f"evidence for {inc['workload']}\n{other}", {"apps/api/deployment.yaml": "old\n api \n"}
+    monkeypatch.setattr("agent.manager.collect_evidence", fake_collect)
 
     def _make(llm=None, gate=None, verifier=None):
         s = Settings(_env_file=None, debounce_s=0, max_fix_attempts=2)
@@ -211,3 +221,52 @@ async def test_new_symptom_on_escalated_workload_opens_new_incident(make):
     assert len(store.list()) == 1          # same ongoing problem stays with the escalation
     await m.on_signal(sig("api"))          # OOMKilled: a different fault
     assert len(store.list()) == 2
+
+
+async def test_happy_path_uses_one_model_call(make):
+    llm = FakeLLM()
+    m, store, *_ = make(llm=llm)
+    await m.on_signal(sig())
+    await wait_state(store, 1, {"AWAITING_APPROVAL"})
+    assert len(llm.feedback) == 1 and llm.fixer_calls == 0  # triage + diagnosis + fix in one call
+
+
+class FlakyGate(FakeGate):
+    """Fails the first proposal, accepts the corrected one."""
+    def __init__(self): self.runs = 0
+    async def run(self, repo_dir, old, new):
+        self.runs += 1
+        r = GateResult()
+        r.add("dry-run", self.runs > 1, "invalid" if self.runs == 1 else "ok")
+        return r
+
+
+async def test_gate_failure_costs_exactly_one_fixer_call(make):
+    llm = FakeLLM()
+    m, store, *_ = make(llm=llm, gate=FlakyGate())
+    await m.on_signal(sig())
+    await wait_state(store, 1, {"AWAITING_APPROVAL"})
+    assert len(llm.feedback) == 1 and llm.fixer_calls == 1
+
+
+async def test_postmortem_needs_no_model(make):
+    llm = FakeLLM()
+    m, store, *_ = make(llm=llm)
+    await m.on_signal(sig())
+    await wait_state(store, 1, {"AWAITING_APPROVAL"})
+    await m.approve(1, "alice")
+    await wait_state(store, 1, {"RESOLVED"})
+    md = m.postmortem_markdown(1)
+    assert "## Root cause" in md and "limit too low" in md and "abc1234" in md and "RESOLVED" in md
+    assert len(llm.feedback) == 1 and llm.fixer_calls == 0
+
+
+async def test_argocd_echo_is_dropped_without_a_model_call(make):
+    llm = FakeLLM()
+    m, store, *_ = make(llm=llm)
+    await m.on_signal(sig("api"))
+    await wait_state(store, 1, {"AWAITING_APPROVAL"})
+    await m.on_signal(Signal("watch", "demo", "argocd/demo", "AppDegraded", "ArgoCD app demo Degraded", "warning", ["x"]))
+    inc = await wait_state(store, 2, {"DROPPED"})
+    assert "incident #1" in store.transitions(2)[-1]["note"]
+    assert len(llm.feedback) == 1  # only #1's call

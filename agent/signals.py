@@ -17,6 +17,7 @@ class Signal:
     evidence: list[str] = field(default_factory=list)
     ts: float = field(default_factory=time.time)
     stateful: bool = True  # True: re-checkable from current cluster state (watch/sweep)
+    obj: str = ""          # the object an event is about, e.g. "Pod/api-7b5797cc4-zjvmj"
 
     @property
     def key(self) -> str:

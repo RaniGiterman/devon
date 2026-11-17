@@ -151,7 +151,7 @@ def event_signal(ev: dict, now: float | None = None) -> Signal | None:
     sev = "critical" if reason in ("FailedScheduling", "Evicted", "OOMKilling", "FailedMount") else "warning"
     count = ev.get("count") or (ev.get("series") or {}).get("count") or 1
     return Signal("watch", ns, wl, symptom, f"{wl}: {reason}: {msg[:140]}", sev,
-                  [f"event {reason} on {kind}/{name} (x{count}): {msg[:400]}"], ts=parse_ts(last) or now)
+                  [f"event {reason} on {kind}/{name} (x{count}): {msg[:400]}"], ts=parse_ts(last) or now, obj=f"{kind}/{name}")
 
 
 # --- workloads -------------------------------------------------------------
