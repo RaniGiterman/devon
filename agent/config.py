@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     model_fast: str = "openai/gpt-oss-20b"
     model_smart: str = "openai/gpt-oss-120b"
     llm_reasoning_effort: str = ""  # low | medium | high; empty = don't send
-    llm_max_concurrency: int = 2
+    llm_max_concurrency: int = 1  # free-tier rate limits are per minute; parallel calls just collide
 
     # Cluster access. Two identities, see infra/rbac/agent.yaml.
     kubeconfig_read: Path = ROOT / ".work/devon-agent.kubeconfig"

@@ -7,7 +7,7 @@ import time
 from dataclasses import dataclass
 from typing import Awaitable, Callable
 
-MAX_RESULT_CHARS = 6000
+MAX_RESULT_CHARS = 3500  # tool output is re-sent on every loop step; keep it lean
 
 
 @dataclass

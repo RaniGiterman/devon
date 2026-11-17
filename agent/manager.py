@@ -79,12 +79,21 @@ class IncidentManager:
         sigs = self.store.signals(iid, since=time.time() - ESCALATED_QUIET_S)
         return bool(sigs)
 
+    def _parent_active(self, parent: dict | None) -> bool:
+        """A root-cause incident is still active while it is open, or escalated and still signalling
+        (a human is on it; its downstream symptoms should stay quiet too)."""
+        if not parent:
+            return False
+        if parent["state"] not in TERMINAL:
+            return True
+        return parent["state"] == "ESCALATED" and self._still_noisy(parent["id"])
+
     def _open_parent(self, last: dict | None) -> dict | None:
         if not last or last["state"] != "DROPPED":
             return None
         dup = (last.get("triage") or {}).get("duplicate_of")
         parent = self.store.get(int(dup)) if dup else None
-        return parent if parent and parent["state"] not in TERMINAL else None
+        return parent if self._parent_active(parent) else None
 
     def _attach(self, iid: int, sig: Signal) -> None:
         k = (iid, sig.source, sig.symptom, sig.summary)
@@ -164,7 +173,7 @@ class IncidentManager:
         self.store.update(iid, triage=triage, severity=triage.get("severity") or inc["severity"])
         await self._to(iid, "TRIAGED", triage.get("reason", ""), notify=False)
         dup = triage.get("duplicate_of")
-        if dup and self.store.get(int(dup)) and self.store.get(int(dup))["state"] not in TERMINAL:
+        if dup and str(dup).isdigit() and self._parent_active(self.store.get(int(dup))):
             await self._to(iid, "DROPPED", f"downstream symptom of incident #{dup}")
             return
         if not triage.get("actionable", True):

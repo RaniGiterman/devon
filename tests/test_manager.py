@@ -172,6 +172,20 @@ async def test_downstream_duplicate_is_dropped_and_stays_quiet(make):
     assert len(store.list()) == 2  # no new incident while #1 is open
 
 
+async def test_downstream_of_escalated_incident_stays_quiet(make):
+    """Regression: a frontend symptom of an escalated (still failing) api incident must not
+    open a fresh investigation."""
+    m, store, *_ = make(llm=FakeLLM(diag={**DIAG, "fix_class": "none", "escalate_reason": "code bug"}))
+    await m.on_signal(sig("api"))
+    await wait_state(store, 1, {"ESCALATED"})
+    m.llm.triage = {"actionable": True, "severity": "critical", "duplicate_of": 1, "reason": "downstream"}
+    await m.on_signal(sig("frontend"))
+    await wait_state(store, 2, {"DROPPED"})
+    m._seen.clear()
+    await m.on_signal(sig("frontend"))
+    assert len(store.list()) == 2  # still attached to #2, no new incident
+
+
 async def test_approve_when_not_waiting_is_refused(make):
     m, store, *_ = make()
     assert "not awaiting" in await m.approve(99, "x")
